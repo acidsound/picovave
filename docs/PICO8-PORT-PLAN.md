@@ -8,7 +8,8 @@
 > `picovave/platform/`(하드웨어 HAL · USB/OTA · 로더 · 패커)이다. femto8 엔진 원본은
 > 이전 시도 트리 `../../picovave/femto8`(upstream MIT, pin `f9e5097`)에 pristine 사본으로 남아 있다.
 > **이식은 완료되었다**: 기기·시뮬레이터·호스트 프리뷰가 같은 엔진을 돌리고 `tools/verify_final.py`가
-> 136개 검사로 그린이다(아래 "Done" 참조).
+> 204개 검사로 그린이다(아래 "Done" 참조). 이 문서는 **계획 기록**이다 — 현재 상태·남은 일·실기 확인
+> 절차는 [`HANDOVER.md`](HANDOVER.md)에 있다.
 
 ---
 
