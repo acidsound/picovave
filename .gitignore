@@ -1,0 +1,9 @@
+# Python caches from the tools
+__pycache__/
+*.pyc
+
+# The OTA venv that tools/ota_probe.py re-execs into
+tools/.venv/
+
+# macOS
+.DS_Store
