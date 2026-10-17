@@ -230,6 +230,10 @@ EXPORT int32_t sim_sysex(uint32_t n)
 }
 
 EXPORT uint32_t sim_cart_active(void) { return pv_cart.active < 0 ? 0xFFFFFFFFu : (uint32_t)pv_cart.active; }
+/* WHICH cart is on the panel (picovave_cart.h's pv_run_slot: a slot, -1 the embedded default
+ * cart, -2 nothing at all). sim_cart_active() is the store's committed slot, which is not the
+ * same thing once the boot ladder has stepped down from a cart the pool cannot hold. */
+EXPORT int32_t  sim_cart_running(void) { return (int32_t)pv_run_slot; }
 EXPORT uint32_t sim_cart_replies(void) { return pv_cart.replies; }
 EXPORT uint32_t sim_cart_reply(void) { return ((uint32_t)pv_cart.last_cmd << 8) | pv_cart.last_code; }
 EXPORT uint8_t *sim_reply(void) { return sim_reply_buf; }

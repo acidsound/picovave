@@ -58,7 +58,7 @@ const check = (what, ok, extra = "") => {
 const NAMES = ["sim_init", "sim_frame", "sim_fb", "sim_draws", "sim_ms", "sim_bytes", "sim_boots",
   "sim_wdt", "sim_button", "sim_key", "sim_enc", "sim_pad", "sim_fader", "sim_wheel", "sim_midi",
   "sim_rate", "sim_render", "sim_out_l", "sim_out_r", "sim_pads", "sim_leds",
-  "sim_heap_peak", "sim_heap_used", "sim_heap_refused", "sim_device_alloc"];
+  "sim_heap_peak", "sim_heap_used", "sim_heap_refused", "sim_device_alloc", "sim_cart_running"];
 check("exports the simulator contract", NAMES.every((n) => typeof ex[n] === "function"),
   NAMES.filter((n) => typeof ex[n] !== "function").join(",") || "");
 
@@ -195,15 +195,18 @@ if (fixtures.length) {
   check("the committed cart is the active slot", ex.sim_cart_active() === 0, "slot=" + ex.sim_cart_active());
 
   for (let i = 0; i < 30; i++) ex.sim_frame();
-  // This cart is one of the big ones (600 KB+ of Lua under the cost model), so on the device's own
-  // allocator the honest outcome is the pool refusing it - --device-alloc links that allocator, and
-  // then "it did not run" must be a refusal, not a status of -1 out of nowhere.
+  // This cart is one of the big ones (hundreds of KB of Lua under the device's own allocator, which
+  // --device-alloc links). Two outcomes are honest: it ran (nothing refused, the committed slot is
+  // the one running), or the pool refused it and the boot ladder fell back to the embedded cart
+  // that always runs. What must NEVER happen - the baba freeze this ladder exists for - is a
+  // status with nothing running afterwards, i.e. a panel stuck on its boot screen.
   const committedRefused = Number(ex.sim_heap_refused());
-  check("the committed cart is the active slot and it runs",
-        ex.sim_cart_active() === 0 &&
-        (ex.sim_status() === 0 ? committedRefused === 0 : committedRefused > 0),
+  const committedRunning = ex.sim_cart_running();
+  check("the committed cart runs, or the pool refused it and the ladder fell back",
+        ex.sim_cart_active() === 0 && ex.sim_status() === 0 &&
+        (committedRefused === 0 ? committedRunning === 0 : committedRunning === -1),
         "slot=" + ex.sim_cart_active() + " status=" + ex.sim_status() +
-        " refused=" + committedRefused);
+        " running=" + committedRunning + " refused=" + committedRefused);
   check("the uploaded cart draws", nonBlack(snap()) > 0, nonBlack(snap()) + " lit px");
 
   // LIST answers with one INFO frame per slot and then an OK: the slot, its length and its name.
@@ -278,8 +281,11 @@ if (fixtures.length) {
     for (let i = 0; i < frames; i++) probe.sim_frame();
     return { peak: Number(probe.sim_heap_peak()), used: Number(probe.sim_heap_used()),
              refused: Number(probe.sim_heap_refused()), deviceAlloc: Number(probe.sim_device_alloc()) === 1,
-             status: probe.sim_status(), slot: probe.sim_cart_active() };
+             status: probe.sim_status(), slot: probe.sim_cart_active(),
+             running: Number(probe.sim_cart_running()) };
   };
+  // Which cart is on the panel, in words: a slot, the embedded default cart, or nothing.
+  const cartOf = (r) => r < 0 ? (r === -1 ? "embedded" : "nothing") : "slot " + r;
   // Under --device-alloc the pool is really 294,912 B and the allocator really refuses, so the
   // verdict is a fact; over the cost model the peak IS the answer (nothing can refuse there).
   const fit = (peak, refused) =>
@@ -305,20 +311,31 @@ if (fixtures.length) {
     const lit = nonBlack(snap());
     // The commit is the claim; the run can only happen if the pool can serve the cart (these five
     // are real games, 600 KB to 2 MB of Lua under the cost model, so on the device's own allocator
-    // only the smallest fits). "It did not run" must then BE a refusal - never a silent status -1.
+    // only the smallest fits). Two things have to hold either way, and the second one is what a
+    // real SMK-37 Pro got wrong with baba:
+    //   - a cart the pool cannot serve is the pool's own REFUSAL, never a silent status -1;
+    //   - and the boot LADDER must then step down (the slot it replaced, then the embedded default
+    //     cart) until a cart RUNS: the panel may not be left on the boot screen because one cart
+    //     did not fit. picovave_boot() closes the engine's Lua between candidates to make that
+    //     memory available again (docs/HANDOVER.md §7).
     const refusedHere = Number(ex.sim_heap_refused());
+    const runningHere = Number(ex.sim_cart_running());
     const ranHere = ex.sim_status() === 0 && lit > 0;
     check("a real .p8.png cart commits and runs: " + name,
-          ex.sim_cart_active() === slot && (ranHere ? refusedHere === 0 : refusedHere > 0),
-          "status=" + ex.sim_status() + " lit=" + lit +
+          ex.sim_cart_active() === slot && ranHere &&
+          (refusedHere > 0 ? runningHere !== slot : runningHere === slot),
+          "status=" + ex.sim_status() + " running=" + cartOf(runningHere) + " lit=" + lit +
           (refusedHere ? " · the pool refused " + refusedHere : "") + " (" + payload.length + " B)");
     const m = await probeCart(name, payload, 300);    // 10 s of cart time: a game's steady state
-    // A cart the pool can serve must run, and one it cannot must be the pool's own refusal - never
-    // a silent -1: with the device's allocator linked in, this is what says "it fits the SMK-37".
-    const ran = m.status === 0 && m.peak >= 64 * 1024;   // >= the engine's own buffers: it ran
+    // The same two rules in a FRESH instance with the device's allocator linked in: a cart the pool
+    // can serve runs (no refusal at all), and one it cannot is refused AND the ladder still ends on
+    // a cart that runs. That "and" is the device claim - "it fits the SMK-37" is only half of it.
+    const served = m.refused === 0;
     check("  ...and the device pool it would need",
-          m.deviceAlloc ? (ran ? m.refused === 0 : m.refused > 0) : ran,
-          fit(m.peak, m.refused) + " (settled " + Math.round(m.used / 1024) + " KB)");
+          m.status === 0 && m.peak >= 64 * 1024 &&   // >= the engine's own buffers: something ran
+          (served ? m.running === m.slot : m.running !== m.slot),
+          fit(m.peak, m.refused) + " (settled " + Math.round(m.used / 1024) + " KB, running " +
+          cartOf(m.running) + ")");
   }
 
   // ...and a real one the device CAN run must fit, measured rather than assumed. flipside is the

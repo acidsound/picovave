@@ -882,6 +882,36 @@ def main():
           "p8_load_cooked(" in engine_c and "pico8_code_section_decompress(" in engine_c)
     check("the expansion targets the full Lua script buffer (upstream overflowed a 32 KiB one)",
           "m_lua_script, LUA_SCRIPT_SIZE - 1)" in engine_c)
+    # The boot ladder has to hand the pool back before EVERY candidate, or a cart the device cannot
+    # run takes the device down with it. Both halves were real on the SMK-37 Pro (baba uploaded, the
+    # panel then stayed on its boot screen for good) and neither was a hardware fault:
+    #   - a cart too big for the pool is refused, and the failed compile leaves that memory
+    #     unreachable but UNCOLLECTED - Lua's allocator throws out of it and nothing runs a GC after;
+    #   - an upload boots the new cart with the OLD one still live, and that one holds the pool.
+    # Either way the next p8_load_cooked() (64 KiB of script buffer, out of a 288 KiB pool) could not
+    # be served, hh_cart_next() walked to the end, picovave_status stayed -1 and picovave_frame()
+    # returned forever. p8_stop_cart() is the release half of p8_reset_cart(): lua_shutdown_api() is
+    # lua_close(), so every object goes and L is NULL (p8_begin() -> p8_reset_cart() ->
+    # lua_load_api() builds it again). It deliberately skips p8_reset_cart()'s assert(!cart_running):
+    # on an upload a cart IS still running, and the assert (enabled - nothing defines NDEBUG) would
+    # abort instead of booting.
+    ladder = (SRC / "src" / "picovave_p8.h").read_text()
+    loop = ladder[ladder.index("for (;;) {"):ladder.index("picovave_frame();")]
+    stop = engine_c[engine_c.index("int p8_stop_cart(void)"):]
+    stop = stop[:stop.index("\n}")]
+    check("the boot ladder hands the pool back before every candidate (a refused cart cannot freeze it)",
+          "p8_stop_cart();" in loop and "p8_reset_cart();" not in loop)
+    check("...and that release is lua_close(), not p8_reset_cart() - on upload a cart IS still running",
+          "lua_shutdown_api();" in stop and "cart_running = false;" in stop and "assert(" not in stop
+          and "int p8_stop_cart(void);" in (SRC / "femto8" / "src" / "p8_emu.h").read_text())
+    check("a candidate that runs clears the status the refused ones before it set",
+          "picovave_status = 0;" in loop[loop.index("if (p8_begin() == 0) {"):])
+    check("the sim proves the fallback end to end: refused -> the built-in cart RUNS, status is 0",
+          "sim_cart_running" in sim_c and "sim_cart_running" in (SRC / "sim" / "sim_test.mjs").read_text()
+          and "the committed cart runs, or the pool refused it and the ladder fell back"
+              in (SRC / "sim" / "sim_test.mjs").read_text())
+    check("the page measures a cart against the device's own pool before uploading it",
+          "DEVICE_HEAP" in page and "measureCart" in page and "confirm(" in page)
     # PICO-8's `?` is `print(`, closed at the end of the line, so it can be an EXPRESSION -
     # `local w = ?text, 0, -1000` measures a string (print returns the x after the text). Upstream
     # femto8's Lua only accepts it as a statement, which makes real carts (baba_demake-9) fail to

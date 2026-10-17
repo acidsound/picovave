@@ -99,6 +99,23 @@ PICO-8의 저장 그 자체다).
 `picovave_boot()`), 슬롯에 남아 POWER-ON 뒤에도 다시 뜬다. CLI(`tools/fm1_install.py`)는 아직
 펌웨어 설치만 하고 카트 명령이 없다 — 실기 카트는 페이지의 FLASH(USB)로 넣는다.
 
+**기기가 못 돌리는 카트는 거부되고, 기기는 멈추지 않는다.** 카트의 Lua 비용은 소스 크기의 10~20배에
+런타임 데이터(테이블·문자열)가 더해지는데, 기기 풀은 총 287 KB(294,912 B − 1 KiB red zone)이고 그중
+엔진이 ~108 KB를 쓴다. 그래서 **크기로는 예측할 수 없다** — 45 KB 스크립트(baba)가 안 돌고 20 KB
+스크립트도 문자열/테이블이 많으면 안 돈다. 유일한 판정은 **실측**이다:
+
+- 페이지가 카트를 올리기 전에 **기기와 같은 할당자**로 그 카트를 실제로 돌려 `peak`/`refused`를 재고
+  (`measureCart()`), `기기 OK` / `기기 불가`를 표시한다. 기기 불가면 FLASH(USB) 업로드 전에
+  `confirm()`으로 한 번 더 묻는다.
+- 기기 자체도 **롤백 사다리**로 방어한다: 부팅/업로드 시 최신 유효 슬롯이 거부되면(`p8_begin()`이
+  `LUA_ERRMEM`) → 그 슬롯이 대체한 슬롯 → **내장 기본 카트** 순으로 내려간다. 따라서 실기 풀을 넘는
+  카트를 올려도 패널이 멈추지 않고 기본 카트가 계속 돈다(측정: baba는 피크 293 KB·거부 6회 →
+  기본 카트 폴백, `status=0`).
+
+참고: PicoPico 같은 ESP32-WROVER-B(PSRAM 8 MB) 포트에서 같은 카트가 도는 것은 인터프리터 차이가
+아니다 — femto8도 z8lua를 vendor한다(`LUA_NUMBER = fix32_t`). 차이는 힙 크기뿐이고, AC791N에는
+PSRAM 인터페이스가 없어 이 상한은 하드웨어 제약이다.
+
 ## 입력
 
 기기는 Makkuro37의 `smk_input.h`(SPI2 + 74HC595, 그리고 ADC mux)로 18 버튼 · 37 건반 · 8 엔코더에
@@ -173,7 +190,7 @@ PICO-8의 저장 그 자체다).
     python3 tools/build_sim.py --device-alloc                  # 힙을 femto8/stub/device/alloc.c로: "이 카트가 실기에서 도는가"
     python3 -m http.server -d build/sim 8738                   # → http://localhost:8738
 
-    # 3. 검증 (앱/패키지 + 화면·입력 픽셀 일치(호스트 프리뷰 ↔ wasm) + 시뮬레이터 페이지 + 실기 플래셔 교차검증, 199개 검사)
+    # 3. 검증 (앱/패키지 + 화면·입력 픽셀 일치(호스트 프리뷰 ↔ wasm) + 시뮬레이터 페이지 + 실기 플래셔 교차검증, 204개 검사)
     AC79_SDK=~/fw-AC79_AIoT_SDK python3 tools/verify_final.py
 
 준비물: JieLi pi32v2 툴체인(`~/.jieli/toolchain`), JieLi AC79 SDK, Pillow, Node.

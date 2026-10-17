@@ -14,10 +14,11 @@
 | wasm 시뮬레이터 / 호스트 프리뷰 / 기기 | 같은 엔진, 화면 **픽셀 단위 일치** (`tools/verify_final.py` 통과, "all checks passed") |
 | 펌웨어 부팅 | **원인 확정·수정 완료.** 원인은 "야생 SP"가 아니라 **newlib `setjmp`의 sp 사용 vs 하드웨어 EMU 스택 창**이었다(§7) |
 | 원인 규명 | **100%** — 디스어셈블리로 증명(§7). 피해자는 `setjmp`, 가해자도 `setjmp` |
-| 실기 사용 가능 여부 | **확인 대기** — 태그 `68c5e5f1` 패키지가 첫 "부팅 기대" 빌드다. 사진 한 장이면 확정된다(§11) |
+| 카트가 기기 풀보다 클 때 | **원인 확정·수정 완료(2026-10-18).** 실기에서 멈추던 것(부팅 화면 고정)은 하드웨어가 아니라 **래더가 후보 사이에 풀을 돌려주지 않은 것**이었다. 이제 거부된 카트는 **기본 카트로 폴백해 계속 실행**된다(§7 두 번째 결함) |
+| 실기 사용 가능 여부 | **확인 대기** — 태그 `e5e5d778` 패키지가 부팅 수정 + 래더 폴백을 함께 담은 빌드다. 사진 한 장이면 확정된다(§11) |
 
-build/`picovave.fwsc`(태그 `68c5e5f1`)가 이 수정을 담은 패키지다. 이전 커밋(`78119fd`)의 반쯤 적용된
-계측기 패치는 **빌드·검증 게이트 두 곳을 빨갛게 만든 상태로 커밋**되어 있었다 — 이번에 함께 해소했다(§8).
+build/`picovave-e5e5d778.fwsc`(태그 `e5e5d778`)가 현재 패키지다. 앞선 두 커밋(`f65c25d`, `55a7de4`, 태그
+`68c5e5f1`)이 부팅 크래시를 고쳤고(§7), 이번 커밋이 업로드 후 멈추던 두 번째 결함을 고쳤다.
 
 ---
 
@@ -78,7 +79,7 @@ AC79_SDK=/Users/spectrum/fw-AC79_AIoT_SDK python3 tools/build_picovave.py
 #   -> "tag <8hex>" 를 출력. 산출물 build/picovave.fwsc
 #   -> 플래싱·증거용으로 build/picovave-<tag>.fwsc 복사본을 남겨둘 것
 
-# 검증 (199검사, 인자 없음)
+# 검증 (204검사, 인자 없음)
 python3 tools/verify_final.py > /tmp/suite.log 2>&1      # 반드시 로그로 리다이렉트(SIGPIPE)
 #   macOS에는 timeout 명령이 없다. 로그 마지막 줄 "all checks passed" + 종료코드 0 확인.
 #   AC79_SDK가 없으면 읽기 전용 packer 교차검증 한 건이 "(skipped: ...)"로 표시된다(정상).
@@ -270,6 +271,58 @@ ELF 심볼 `jmpbuf_restart` size=100)이고, 위 코드가 쓰는 범위도 정�
 - 초기 `SP ... ABOVE`/`BELOW` 판정, `_ustack_init` 여유(§6a) — §6a는 실제로 고친 버그지만
   이 크래시와는 별개다.
 
+### 두 번째 결함 (2026-10-18, 확정): 기기가 못 돌리는 카트는 **멈추지 않고 폴백**해야 했다
+
+**증상(실기)**: 기본 카트 부팅은 성공. 그 뒤 웹 페이지의 FLASH(USB)로 **baba**(45 KB 스크립트)를
+업로드하면 **부팅 화면에서 그대로 멈춘다**(크래시 화면이 아니라 진행이 없는 화면). 사용자 확인.
+
+**원인(시뮬레이터에서 재현·확정 — 하드웨어 아님)**: 카트의 Lua 비용은 소스의 10~20배(게다가 런타임
+데이터)이고 기기 풀은 총 287 KB(294,912 B − 1 KiB red zone, 그중 엔진 baseline 112,328 B)라 baba는
+**정직하게 거부**된다(실측: `begin=4` = `LUA_ERRMEM`, 풀 피크 293,112 B, 할당 거부 6회). 문제는 그
+다음이다:
+
+1. 거부된 Lua 컴파일이 남긴 메모리는 **도달 불가지만 수거되지 않는다**(`luaM_realloc_`가
+   `LUA_ERRMEM`을 던지고, 뒤이어 GC를 돌리는 사람이 없다). 그 상태로 풀이 293 KB까지 차 있다.
+2. 래더의 다음 후보는 `p8_load_cooked()`에서 **연속 64 KiB**(Lua 소스 버퍼)를 요구한다 → 할당 실패
+   → 후보는 "적재 실패"로 판정 → `hh_cart_next()`가 끝(`PV_RUN_END`)까지 걸어간다.
+3. `picovave_status = -1`로 래더가 끝나고 `picovave_frame()`이 매 프레임 즉시 return → **패널이 부팅
+   화면에 고정**. 크래시 화면이 아니라서 "크래시"로 보이지 않았다.
+
+**수정(적용됨)**: 래더가 **매 후보 앞에서 풀을 돌려준다** — `src/picovave_p8.h`가
+`p8_stop_cart()`(`femto8/src/p8_emu.c`)를 부른다. 이 함수는 `lua_close()`(= `lua_shutdown_api()`)로
+**모든 객체를 해제**하고 `L`을 NULL로 남긴다(다음 `p8_begin()` → `p8_reset_cart()` →
+`lua_load_api()`가 새 상태를 만든다). 실측: baba 시도 후 `used`가 223,760 → **112,328 B**(엔진
+baseline)로 돌아오고, 폴백 후보가 `load=0 begin=0`으로 실행된다.
+
+왜 `p8_reset_cart()`가 아니라 전용 함수인가: `p8_reset_cart()`에는 `assert(!cart_running)`이 있고
+(이 빌드들은 `NDEBUG`를 정의하지 않는다 → assert가 살아 있다), **업로드로 다시 부팅할 때는 옛 카트가
+살아 있다**. 그 상태로 부르면 abort(에뮬레이터에서는 `proc_exit` 스텁 때문에 무한 루프)로 **새로
+멈춘다**. `p8_stop_cart()`는 `p8_begin()`의 첫 두 줄과 같은 판단(`cart_running`은 프레임 루프에 대한
+주장이고, 여기서는 아무도 그 카트를 스텝하지 않는다)을 명시적으로 쓴다.
+
+**함께 고친 것**: 후보가 성공하면 `picovave_status = 0`으로 되돌린다. 예전 코드는 실패한 후보에서
+`-1`을 대입한 뒤 폴백이 성공해도 그대로 두었다 — 폴백이 처음으로 "성공"하게 되자 프레임 루프가 즉시
+return하는 두 번째 버그가 드러났다.
+
+**제품 규칙(변경 없음, 이제 지켜진다)**: 스크립트 크기로는 예측할 수 없다 — 20 KB 스크립트도
+문자열/테이블 폭탄이면 못 돌고, 45 KB라도 데이터가 가벼우면 돌 수 있다. 그래서 유일한 판정은
+**실측**이다: 페이지가 기기와 같은 할당자로 그 카트를 실제로 돌려 `peak`/`refused`를 재고, 기기
+불가면 **업로드 전에 경고하고 확인을 받는다**(`confirm()` 게이트). 그리고 기기는 어떤 경우에도 멈추지
+않는다: 최신 슬롯이 거부되면 → 그것이 대체한 슬롯 → 내장 기본 카트 순으로 내려간다.
+
+**측정값**(기기 할당자, `sim_heap_*`; `tools/build_sim.py --device-alloc`):
+
+| 카트 | peak | 판정 |
+|---|---|---|
+| 내장 기본 카트 | 108 KB | 실행 (여유 179 KB) |
+| flipside_-1 | 204~215 KB | 실행 (여유 72~83 KB) |
+| baba_demake-9 · bunnysurvivor-9 · fighter_street_ii-1 · terra_1cart-44 | 285~293 KB (거부 5~12회) | **기기 불가 → 기본 카트로 폴백** |
+
+같은 카트가 PicoPico(ESP32-WROVER-B, PSRAM 8 MB)에서 도는 것은 **인터프리터 차이가 아니다**: femto8도
+z8lua를 vendor한다(`femto8/src/lua/luaconf.h`: `#define LUA_NUMBER fix32_t`, 16.16 고정소수점).
+차이는 힙 크기(수 MB vs 287 KB)뿐이고, AC791N 계열에는 PSRAM 인터페이스가 없어 이 상한은 하드웨어
+제약이다.
+
 ---
 
 ## 8. 게이트 상태 — WIP 패치가 남긴 빨간 트리를 해소함
@@ -296,20 +349,32 @@ tools/build_sim.py --engine docker   boots=31, draws=191, parity=ok
 verify_final.py                      all checks passed
 ```
 
+현재 게이트(태그 `e5e5d778`, §7 두 번째 결함 수정 포함):
+
+```
+image 234228 B (slot 0x97400) · RAM .data+.bss 145608 B of 147456 · Lua heap 293888 B
+package 651271 B, identity 'SMK-37 Pro_700', tag e5e5d778
+tools/build_sim.py --engine docker                 boots=31, draws=191, parity=ok
+tools/build_sim.py --device-alloc --stack 24320     all ok (거부→폴백 검사 포함)
+verify_final.py                                    204검사 all checks passed
+```
+
 ---
 
 ## 9. 그 다음 우선순위
 
-1. **실기 확인** — `build/picovave-68c5e5f1.fwsc`를 플래싱하고 패널 사진 한 장. 기대: 기본 카트
-   (버튼으로 픽셀을 옮기는 화면)가 뜨고, 부팅 화면의 `STACK n/24320`이 여유를 보여준다.
-   실패하면 여전히 §2의 표로 읽는다(`PC`/`EMU`/`DBG`/`SP`/`DEEP`/`WILD`).
-2. **래더 테스트 마무리** — 롤백 사다리(최신 유효 슬롯 → 그것이 대체한 슬롯 → 내장 기본 카트 → 없음)를
-   `sim/sim_test.mjs`에 추가(깨진 카트 폴백 + 사다리 순회). §7의 "날카로운 모서리"(`_init`의
-   `reset()`)도 여기서 함께 다룰 수 있다.
-3. **BLE 결론 문서화** — picovave에는 BLE MIDI가 **없다**(USB-MIDI만). 스톡 v016 `app.bin`에만
+1. **실기 확인(두 결함을 한 번에)** — `build/picovave-e5e5d778.fwsc`를 플래싱하고 **두 장면**을 본다:
+   (a) 부팅 → 기본 카트 화면(버튼으로 픽셀을 옮기는 화면) + 부팅 화면의 `STACK n/24320` 여유;
+   (b) 페이지에서 **baba를 FLASH(USB)로 업로드** → 패널이 **기본 카트로 폴백해 계속 실행**되고
+   (멈춤 없음, §7 두 번째 결함), 같은 순간 USB/OTA가 살아 있다(`--ask`로 태그 확인).
+   실패하면 §2의 표로 읽는다(`PC`/`EMU`/`DBG`/`SP`/`DEEP`/`WILD`).
+2. **BLE 결론 문서화** — picovave에는 BLE MIDI가 **없다**(USB-MIDI만). 스톡 v016 `app.bin`에만
    BLE-MIDI GATT UUID(`03B80E5A-…`, `7772E5DB-…`)와 `BTSTACK`/`BTCTRLER`가 있었고, picovave·
    `hello`의 `app.bin`에는 0건이다. 복구 경로로 BLE를 기대하면 안 된다 — `README.md`/`RECOVERY.md`에 적을 것.
-4. 여유가 되면 USB로 크래시 레코드를 내려받는 덤프를 추가 — 사진 판독을 없앨 수 있다.
+3. 여유가 되면 USB로 크래시 레코드를 내려받는 덤프를 추가 — 사진 판독을 없앨 수 있다.
+4. 여유가 되면 §7의 "날카로운 모서리"(`_init`이 `reset()`/`run()`을 부르는 카트 → 래더 루프 밖의
+   `longjmp`)를 처리: 래더 루프 자체를 `setjmp`로 감싸면 그런 카트도 폴백으로 내려보낼 수 있다.
+   현재 기본 카트는 그러지 않아 무해하고, 업로드되는 카트는 baba류가 대부분이라 우선순위가 낮다.
 5. `tools/ota_probe.py`는 `mido` 의존이라 이 개발기에서 실행할 수 없다. 의존성 없는 경로(또는 설치)
    중 하나를 정할 것.
 
@@ -346,6 +411,19 @@ verify_final.py                      all checks passed
 주의: `build/picovave/cart_default.h`와 `picovave/cdata/`는 빌드 시 생성되는 산출물이라 추적하지 않는다
 (상위 `.gitignore`).
 
+### 래더 폴백 수정(2026-10-18)에서 건드린 파일
+
+| 파일 | 내용 |
+|---|---|
+| `src/picovave_p8.h` | 래더 루프가 **매 후보 앞에서** `p8_stop_cart()` 호출(풀 반납, §7 두 번째 결함), 성공 후보에서 `picovave_status = 0` |
+| `femto8/src/p8_emu.c` | `p8_stop_cart()` 추가 — `lua_close()`로 전부 해제, `L`은 NULL로(= `p8_reset_cart()`의 해제 절반, `assert` 없음) |
+| `femto8/src/p8_emu.h` | `p8_stop_cart()` 선언 |
+| `sim/sim.c` | `sim_cart_running()` export(= `pv_run_slot`; -1=내장 기본, 0/1=슬롯) |
+| `sim/sim_test.mjs` | 실카트 루프가 **폴백까지** 검사: `status === 0` 그리고 (거부 0이면 그 슬롯 / 거부>0이면 내장 기본) |
+| `web/sim/index.html` | `measureCart()`가 `refused`/`running`까지 반환, `fitText()`가 판정 표시, FLASH(USB) 업로드 전 `confirm()` 게이트 |
+| `tools/verify_final.py` | 204검사(래더 4건 + 페이지 실측 1건 추가) |
+| `docs/HANDOVER.md` · `README.md` · `docs/RECOVERY.md` | 이 원인과 폴백 동작 문서화 |
+
 ---
 
 ## 11. 다음 사람에게 필요한 것 한 가지
@@ -354,8 +432,11 @@ verify_final.py                      all checks passed
 읽히도록** 만들 것.
 
 - **정상이면**: 기본 카트 화면 + 부팅 화면의 `BUILD`/`STACK n/24320`만 확인하면 된다. 그 화면이
-  뜨면 §7 수정이 맞은 것이고, 그 다음은 카트 업로드(페이지)와 래더 테스트다.
+  뜨면 §7의 부팅 수정이 맞은 것이다. 이어서 페이지에서 **baba를 FLASH(USB)로 업로드**해 보고 패널이
+  **기본 카트로 폴백해 계속 실행**하면(멈춤 없음) 두 번째 결함 수정도 확인된다.
 - **죽으면**: `BUILD`(무엇이 올라갔는지), `PC`, `EMU/DBG`, `SP`, `DEEP`, `WILD` — 이 여섯 줄.
   `EMU 0008 DBG 0000` + `PC`가 `setjmp`라면 **이번 수정이 안 들어간 패키지**인지부터 확인할 것
-  (`--ask`로 태그 확인, 기대값 `68c5e5f1`).
+  (`--ask`로 태그 확인, 기대값 `e5e5d778`).
+- **멈추면**(크래시 화면 없이 화면이 안 움직이면): §7 두 번째 결함의 증상이다 — 이 패키지에서는
+  `p8_stop_cart()`가 후보 사이에 풀을 돌려주므로 나오지 않아야 한다. 나온다면 `--ask`로 태그부터.
 - 크래시 기록은 `.noinit`이라 리셋을 넘어 살아남는다. 부팅 후 10초 동안 같은 화면이 다시 뜬다.

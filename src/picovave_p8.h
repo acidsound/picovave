@@ -155,18 +155,33 @@ static void picovave_boot(void)       /* everything before the loop; re-runnable
     picovave_boots = 0;
 
     for (;;) {
+        /* Empty the pool before anything is judged against it. What is in it belongs either to
+         * the cart the device is still running (every USB upload boots with the old cart live,
+         * and it holds up to the whole Lua budget) or to a candidate that failed just now - and
+         * a cart that ran the pool out leaves that memory unreachable but uncollected, since Lua
+         * throws out of the compile and nothing runs a GC after it. p8_load_cooked() needs 64 KiB
+         * of the pool for the Lua source buffer, so without this a cart that FITS was refused for
+         * memory another cart was standing on, and the ladder could not take a single step: the
+         * panel stayed on the boot screen after baba was uploaded and never moved again. That was
+         * the real SMK-37 Pro symptom (docs/HANDOVER.md §7), not a hardware fault. */
+        p8_stop_cart();
+
         p = hh_cart_data();
         n = hh_cart_size();
         if (p && p8_load_cooked(p, n) == 0) {
             hh_boot_stage(3);
             if (p8_begin() == 0) {
+                picovave_status = 0;          /* THIS candidate runs: the ones before it do not count */
                 hh_boot_stage(4);
                 break;                        /* it runs */
             }
         }
-        picovave_status = -1;                 /* no cart, not a cooked cart, or out of memory */
-        if (!hh_cart_next())
+        /* It did not start. Step down the ladder; the embedded default cart is the last
+         * candidate, so this can only run out if even that cannot be loaded. */
+        if (!hh_cart_next()) {
+            picovave_status = -1;             /* nothing left to try: the boot screen stays up */
             break;
+        }
     }
 
     picovave_frame();

@@ -494,6 +494,29 @@ int p8_begin(void)
     return 0;
 }
 
+/* picovave: hand back everything the loaded cart holds, so the next candidate starts against an
+ * empty pool. The harness's boot ladder calls this at the top of every step (picovave_p8.h), for
+ * two reasons:
+ *   - the cart STILL RUNNING when a new one is being booted - which is every USB upload, the
+ *     device boots its new cart with the old one live - holds up to the whole Lua budget;
+ *   - a candidate that could not start leaves the memory it took unreachable but UNCOLLECTED:
+ *     Lua's allocator throws out of the compile (luaM_realloc_'s LUA_ERRMEM) and no GC follows.
+ * Either way p8_load_cooked() would be asking for its 64 KiB source buffer out of a pool someone
+ * else is standing on, and a cart that FITS would be refused for it.
+ *
+ * Deliberately the release half of p8_reset_cart() and not the whole thing: lua_shutdown_api() is
+ * lua_close(), so EVERY object goes, reachable or not, and L is left NULL - p8_begin() ->
+ * p8_reset_cart() -> lua_load_api() builds the state again with an empty pool. It also skips
+ * p8_reset_cart()'s assert(!cart_running): cart_running is a claim about the frame loop, and
+ * nothing is stepping the cart here (this is p8_begin()'s own opening move, for the same reason). */
+int p8_stop_cart(void)
+{
+    cart_running = false;
+    p8_close_cartdata();
+    lua_shutdown_api();
+    return 0;
+}
+
 int p8_step(void)                  /* one iteration of p8_main_loop() */
 {
     if (!cart_running)

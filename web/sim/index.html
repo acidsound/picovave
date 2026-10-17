@@ -1003,7 +1003,11 @@ async function measureCart(d) {
       ex.sim_sysex(m.length);
     }
     for (let i = 0; i < MEASURE_FRAMES && ex.sim_status() === 0; i++) ex.sim_frame();
-    return { peak: Number(ex.sim_heap_peak()), status: ex.sim_status() };
+    // refused/running are what the verdict really rests on. A cart the device's pool cannot serve is
+    // REFUSED (the load fails outright), and the firmware's boot ladder then falls back to a cart
+    // that runs - so status alone no longer tells the cart's own story (docs/HANDOVER.md §7).
+    return { peak: Number(ex.sim_heap_peak()), refused: Number(ex.sim_heap_refused()),
+             status: ex.sim_status(), running: Number(ex.sim_cart_running()) };
   } catch (e) {
     return null;
   }
@@ -1015,9 +1019,11 @@ function fitText() {
   const kb = (n) => Math.round(n / 1024).toLocaleString();
   if (cartFit.status !== 0)
     return ` · 기기 판정: 카트가 로드되지 않는다 (status ${cartFit.status})`;
-  return cartFit.peak <= DEVICE_HEAP
-    ? ` · 기기 OK: 실측 peak ${kb(cartFit.peak)} KB / ${kb(DEVICE_HEAP)} KB (여유 ${kb(DEVICE_HEAP - cartFit.peak)} KB)`
-    : ` · ⚠ 기기 불가: 실측 peak ${kb(cartFit.peak)} KB > 기기 풀 ${kb(DEVICE_HEAP)} KB (시뮬레이터 전용)`;
+  if (cartFit.refused > 0 || cartFit.peak > DEVICE_HEAP)
+    return ` · ⚠ 기기 불가: 실측 peak ${kb(cartFit.peak)} KB / 기기 풀 ${kb(DEVICE_HEAP)} KB` +
+      (cartFit.refused ? ` · 기기 풀이 ${cartFit.refused}회 거부` : "") +
+      ` (시뮬레이터 전용 · 기기에서는 기본 카트로 폴백)`;
+  return ` · 기기 OK: 실측 peak ${kb(cartFit.peak)} KB / ${kb(DEVICE_HEAP)} KB (여유 ${kb(DEVICE_HEAP - cartFit.peak)} KB)`;
 }
 
 async function loadCart(file) {
@@ -1036,7 +1042,7 @@ async function loadCart(file) {
   $("cartsay").textContent = `${cartName} · 160x205 해독 · ${cartRaw.length} B (쿠킹 32,800) · 기기 적합성 측정 중…`;
   cartFit = await measureCart(cartRaw);
   $("cartsay").textContent = `${cartName} · 160x205 해독 · ${cartRaw.length} B (쿠킹 32,800)${fitText()}`;
-  if (cartFit && cartFit.status === 0 && cartFit.peak > DEVICE_HEAP)
+  if (cartFit && (cartFit.status !== 0 || cartFit.refused > 0 || cartFit.peak > DEVICE_HEAP))
     warn(`${cartName} 준비됨 — 그러나 기기(SMK-37 Pro)에서는 돌지 않는다: ${fitText().slice(3)} · ` +
          `대상 ${CART_TARGETS[cartTarget]} 을 확인하고 올릴 것`);
   else
@@ -1130,6 +1136,13 @@ let cartUsb = false;
 async function uploadCartUsb(d) {
   if (cartUsb) return fail("FLASH(USB) 가 이미 진행 중이다");
   if (!webMidiSupported()) { fail("이 브라우저에는 Web MIDI 가 없다 — Chrome 을 https / localhost 로 열 것"); return; }
+  /* The device survives a cart it cannot run - the boot ladder falls back to a cart that does
+   * (docs/HANDOVER.md §7) - but uploading one is still pointless, and it is exactly the case that
+   * used to leave the panel on the boot screen. Say so and ask, rather than send it silently. */
+  if (cartFit && (cartFit.status !== 0 || cartFit.refused > 0 || cartFit.peak > DEVICE_HEAP) &&
+      !confirm(`${cartName} 은 기기(SMK-37 Pro)에서 돌지 않는다:\n\n${fitText().slice(3)}\n\n` +
+               `그래도 실기에 올릴까? 기기는 기본/이전 카트로 폴백하며, 이 카트는 실행되지 않는다.`))
+    { fail("FLASH(USB) 카트 업로드 취소 — 기기에서 돌지 않는 카트"); return; }
   const slot = cartSlot;
   cartSlot ^= 1;
   const msgs = cartFrames(slot, cartName, d);
