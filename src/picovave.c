@@ -573,12 +573,17 @@ void fm1_timer5_irq(uint32_t isr_sp)
         pv_sp_min = sp_here;
     if (!pv_stack_ok(sp_here) && pv_sp_bad == 0u) {
         const uint32_t *fr = (const uint32_t *)(uintptr_t)isr_sp;   /* psr/rets/reti, one is the pc */
+        /* Which of the three names the interrupted code: the image runs from XIP (app.ld's XIP
+         * origin, FM1_XIP(FL_APP_LO)) up to _etext, and .ram_text runs from RAM. The link addresses
+         * keep this in the HAL's terms - no literal window in the app. */
+        uint32_t xlo = FM1_XIP(FL_APP_LO), xhi = (uint32_t)(uintptr_t)_etext;
+        uint32_t rlo = (uint32_t)(uintptr_t)_rt_start, rhi = (uint32_t)(uintptr_t)_rt_end;
         uint32_t w;
 
         pv_sp_bad = sp_here;
         pv_sp_bad_pc = fr[2];
         for (w = 0; w < 3u; ++w)
-            if (fr[w] >= 0x02000120u && fr[w] < 0x02100000u)
+            if ((fr[w] >= xlo && fr[w] < xhi) || (fr[w] >= rlo && fr[w] < rhi))
                 pv_sp_bad_pc = fr[w];
     }
     fm1_timer5_ack();
@@ -769,7 +774,40 @@ void fm1_cstart(void)
     for (s = _rt_load, d = _rt_start; d < _rt_end; s++, d++)
         *d = *s;                             /* flash driver code that must run from RAM */
     fm1_mailbox_clear();
-    fm1_guard_enable(FM1_GUARD_STACK | FM1_GUARD_WRITE | FM1_GUARD_BUS | FM1_GUARD_PC);
+    /* THE EMU STACK-LIMIT WINDOW IS NOT ARMED, AND THAT IS THE FIX FOR "EMU 0008".
+     *
+     * This newlib's pi32v2 setjmp()/longjmp() use the jmp_buf ITSELF as a scratch stack, and the
+     * hardware stack guard must not be pointed at that. From build/picovave/picovave.dis:
+     *
+     *   setjmp: 201efe4 [r0+] = {r15-r0}       ; save the registers into the buffer
+     *           201efe8 r1 = sp
+     *           201efec sp = r0                ; sp = jmp_buf + 64  (a .bss/.data address!)
+     *           201eff0 sp += 100
+     *           201eff2 [--sp] = {sp, ssp, usp, icfg, psr, rets, retx, rete, reti}
+     *           201eff6 [sp+32] = r1           ; ...and sp through it
+     *   longjmp: restores through the same path (201f008 sp = r0, 201f010 pop)
+     *
+     * FM1_GUARD_STACK points the EMU's sp windows at [_ustack_lo, _sstack_top], so every access
+     * through that scratch sp is an sp-out-of-window violation. The app's setjmp lives in the
+     * frame loop and its jmp_buf is a .bss global, so the FIRST frame of the first boot raised
+     * EMU_MSG bit 3 and dropped into fm1_fault - which read exactly like a wild stack pointer
+     * (PC inside setjmp, sp in jmpbuf_restart) and was never anything but this. Lua's own jmp_bufs
+     * are stack locals, inside the window, so only the harness's setjmp tripped it - which is also
+     * why the wasm simulator, whose setjmp touches no sp, has always been green.
+     *
+     * What still guards the stacks, so nothing here is unchecked:
+     *   - the two write bands (FM1_GUARD_WRITE) fault a stack that runs into them, which is how a
+     *     real overflow presents (that is what caught the pre-fix boot at 1,196 ms);
+     *   - LUAI_MAXCCALLS=48 is sized against this 24,320-byte user stack (build_picovave.py
+     *     measures the 124 B / 316 B frames), so Lua cannot recurse the engine off it;
+     *   - pv_stack_paint()/pv_stack_depth() report what the previous run actually used ("STACK
+     *     n/24320" on the boot screen).
+     * The one case that can now pass unnoticed is a single frame LARGER than the 256-byte band
+     * that jumps over it without writing to it. */
+    fm1__dbg_unlock();
+    FM1_EMU_CON &= ~(1u << 3);               /* belt and braces: never armed by anything else */
+    fm1__dbg_lock();
+    fm1_guard_enable(FM1_GUARD_WRITE | FM1_GUARD_BUS | FM1_GUARD_PC);
     /* The panel first, before anything this firmware added. The LCD keeps its last frame through a
      * reset, so an unchanged picture on the panel cannot by itself tell "the flash never landed"
      * from "the new build died before it could draw". A mark naming this build, painted at the
@@ -797,6 +835,13 @@ void fm1_cstart(void)
     pv_audio_init();
     pv_audio_fill();
     usb_start();
+    /* The sp meter belongs to the run that dies: picovave_boot() has now shown the PREVIOUS run's
+     * numbers (pv_crash_report reads them first), so start this run's from here. .noinit is not
+     * cleared on a cold power-on, and a stale small value would freeze the meter for the whole
+     * run - that is what made one crash report read "DEEP 5731C1F4", a number no stack ever had. */
+    pv_sp_min = PV_SP_MIN_NONE;
+    pv_sp_bad = 0u;
+    pv_sp_bad_pc = 0u;
     fm1_timer5_start(isr_timer5, 4);            /* above ALNK0 (3) */
     fm1_guard_lock_top();                       /* after the last fm1_irq_attach */
     fm1_irq_enable_all();

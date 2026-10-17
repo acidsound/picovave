@@ -11,13 +11,13 @@
 | | 상태 |
 |---|---|
 | 앱 계층 (PICO-8/femto8 이식) | 완성. 카트 `.p8.png` 업로드(SLOOP 저장 + USB SysEx) |
-| wasm 시뮬레이터 / 호스트 프리뷰 / 기기 | 같은 엔진, 화면 **픽셀 단위 일치** (`tools/verify_final.py` 197검사 통과) |
-| 펌웨어 부팅 | **실패** — 부팅 후 0.5~11초 사이 `EMU 0008`(스택 창 밖 접근)으로 죽고 부트가드가 RESCUE로 떨어짐 |
-| 원인 규명 | 약 90%. "앱의 SP가 야생값이 된다"까지 실측으로 확정. **누가 SP를 망가뜨리는지**가 남은 질문 |
-| 실기 사용 가능 여부 | **불가**. 한 번도 정상 동작한 적 없음(카트를 넣어본 적조차 없음) |
+| wasm 시뮬레이터 / 호스트 프리뷰 / 기기 | 같은 엔진, 화면 **픽셀 단위 일치** (`tools/verify_final.py` 통과, "all checks passed") |
+| 펌웨어 부팅 | **원인 확정·수정 완료.** 원인은 "야생 SP"가 아니라 **newlib `setjmp`의 sp 사용 vs 하드웨어 EMU 스택 창**이었다(§7) |
+| 원인 규명 | **100%** — 디스어셈블리로 증명(§7). 피해자는 `setjmp`, 가해자도 `setjmp` |
+| 실기 사용 가능 여부 | **확인 대기** — 태그 `cc27cc77` 패키지가 첫 "부팅 기대" 빌드다. 사진 한 장이면 확정된다(§11) |
 
-마지막 커밋(`78119fd`)에는 **빌드되지 않은 반쯤 적용된 계측기 패치**가 들어 있다(§8). 그 패치를
-빌드·검증·플래싱하는 것이 다음 첫 작업이다.
+build/`picovave.fwsc`(태그 `cc27cc77`)가 이 수정을 담은 패키지다. 이전 커밋(`78119fd`)의 반쯤 적용된
+계측기 패치는 **빌드·검증 게이트 두 곳을 빨갛게 만든 상태로 커밋**되어 있었다 — 이번에 함께 해소했다(§8).
 
 ---
 
@@ -78,7 +78,7 @@ AC79_SDK=/Users/spectrum/fw-AC79_AIoT_SDK python3 tools/build_picovave.py
 #   -> "tag <8hex>" 를 출력. 산출물 build/picovave.fwsc
 #   -> 플래싱·증거용으로 build/picovave-<tag>.fwsc 복사본을 남겨둘 것
 
-# 검증 (197검사, 인자 없음)
+# 검증 (199검사, 인자 없음)
 python3 tools/verify_final.py > /tmp/suite.log 2>&1      # 반드시 로그로 리다이렉트(SIGPIPE)
 #   macOS에는 timeout 명령이 없다. 로그 마지막 줄 "all checks passed" + 종료코드 0 확인.
 #   AC79_SDK가 없으면 읽기 전용 packer 교차검증 한 건이 "(skipped: ...)"로 표시된다(정상).
@@ -144,9 +144,9 @@ f[24] sp`로 적고 있지만, **f[22]/f[23]은 이 실리콘에서 스택 포�
 | f[16] | `setjmp+0x12` 등 실제 코드 주소 | **인터럽트된 PC — 신뢰 가능** |
 | f[24] | `0x01C7BEFC`(= `_sstack_init` − 4), 이전 빌드 `0x01C7BFFC`(= `_sstack_top` − 4) | **예외 핸들러 자신의 SP** (핸들러는 `ssp`로 진입) |
 | f[23] | `0x01C7BF00` = crt0가 넣은 `_sstack_init` 그대로 | 슈퍼바이저 스택 **기저값**으로 보임 → 앱은 슈퍼바이저 스택을 쓰지 않는다 |
-| f[22] | `jmpbuf_restart + 0x40`(현재 빌드) / `+0x30`(f82ab110) | **jmp_buf 안을 가리키는 데이터 포인터** — `setjmp`가 넘겨받은 인자/스필된 레지스터로 보인다. usp 아님 |
+| f[22] | `jmpbuf_restart + 0x40`(현재 빌드) / `+0x30`(f82ab110) | **`setjmp`가 잠깐 `sp`에 넣는 값 그 자체.** `setjmp` 프롤로그가 `[r0+] = {r15-r0}` 뒤 `sp = r0`(= jmp_buf+64)를 하는데 `+0x40`이 정확히 그 중간값이다(§7). 야생값이 아니라 **`setjmp` 자신의 스크래치 sp**다 |
 
-⇒ **앱의 실제 SP는 프레임에서 읽을 수 없다.** 그래서 ISR 표본 계측기(`DEEP`)를 따로 만들었다.
+⇒ 이 표의 `+0x40`은 "누군가 SP를 망가뜨렸다"는 증거가 아니라 **원인 자체의 지문**이다(§7).
 
 현재 빌드(36251743) 심볼: `jmpbuf_restart = 0x01C0EC2C`, `m_memory = 0x01C0C320`,
 `m_cart_memory = 0x01C0C324`, `fm1_crash = 0x01C7C000`.
@@ -172,93 +172,153 @@ f[24] sp`로 적고 있지만, **f[22]/f[23]은 이 실리콘에서 스택 포�
 
 ---
 
-## 7. 미해결 크래시 — 증거와 현재 가설
+## 7. 크래시 원인 (확정) — newlib `setjmp`가 sp로 `jmp_buf`를 훑는다 vs EMU 스택 창
 
-### 증상
-
-부팅 후 **비결정적인 시점**(1,196 / 11,210 / 1,147틱)에 `EMU 0008 DBG 0000`으로 죽고,
-부트가드가 RESCUE로 떨어진다. `PC`는 매번 `setjmp` 프롤로그의 `[sp+32]` 저장 지점 — 즉 **피해자**다.
+**"야생 SP" 가설은 틀렸다. 크래시는 SP 손상이 아니라 SP 창(sp window) 위반이라는 *가드의 정상 동작*이다.**
+가해자는 `setjmp` 자신이고, 피해자도 `setjmp`이다.
 
 ### 기기에서 받은 사진(원본 증거)
 
 | 태그 | PC | EMU/DBG | SP 관련 | 업텀 | 비고 |
 |---|---|---|---|---|---|
-| `7bc1d0e1` | — | — | f[24] = `_sstack_top − 4` | 1,196 | 창 꼭대기 시작 버그 → (a)로 수정 |
-| `f82ab110` | `0201EDC8` | `0008 / 0000` | SP `01C0EC3C BELOW`, USTACK 1F10/5F00 | 11,210 | (a) 수정 후 9.4배 생존 |
+| `7bc1d0e1` | — | — | f[24] = `_sstack_top − 4` | 1,196 | 창 꼭대기 시작 버그 → §6a로 수정 |
+| `f82ab110` | `0201EDC8` | `0008 / 0000` | SP `01C0EC3C BELOW`, USTACK 1F10/5F00 | 11,210 | §6a 수정 후 9.4배 생존 |
 | `36251743` | `0201EFF6` | `0008 / 0000` | SP `01C7BEFC S OK`, USP `01C0EC6C`, SSP `01C7BF00`, **DEEP `5731C1F4 ?`** | 1,147 | 계측기 투입 |
 
-(`eae03ad8`도 빌드·전달했지만 그 태그의 사진은 없다.)
+(`eae03ad8`도 빌드·전달했지만 그 태그의 사진은 없다. 위 세 장 모두 `EMU 0008 DBG 0000`,
+PC는 `setjmp` 내부 — 즉 전부 같은 원인이다.)
 
-### 36251743이 알려준 결정적 사실
+### 증거: 툴체인의 `setjmp`/`longjmp` 디스어셈블리 (`build/picovave/picovave.dis`)
 
-`DEEP 5731C1F4` — **`0x5731C1F4`는 RAM 주소가 아니다**(RAM은 `0x01C00000–0x01C7FFFF`).
-`DEEP`은 ISR이 매 틱 `&지역변수`로 표본한 최저 주소이므로, **어느 순간 앱의 SP가 야생값이었다**는
-뜻이다. 같은 사진에서:
+```
+setjmp:                                    ; newlib pi32v2
+ 201efe4:  [r0+] = {r15-r0}                ; 레지스터 16개를 jmp_buf[0..63]에 저장
+ 201efe8:  r1 = sp                         ; 호출자의 sp를 r1에
+ 201efec:  sp = r0                         ; *** sp = jmp_buf + 64 — 즉 .bss 주소! ***
+ 201eff0:  sp += 100
+ 201eff2:  [--sp] = {sp, ssp, usp, icfg, psr, rets, retx, rete, reti}
+ 201eff6:  [sp+32] = r1                    ; ★ 관측된 크래시 PC (0201EFF6)
+ 201eff8:  sp = r1
+ 201effc:  r0 = 0
+ 201effe:  rts
 
-- `SSP 01C7BF00` = crt0 값 그대로 → 앱은 슈퍼바이저 스택을 쓰지 않는다.
-- `SP 01C7BEFC S OK` = 핸들러 자신의 스택(정상).
-- 사용자 스택 페인트 스캔은 8 KB 남짓만 사용 → **SP가 야생값이 되기까지는 정상적으로 돌고 있었다.**
+longjmp:
+ 201f000:  [r0+0] = r1                     ; 반환값 1을 jmp_buf[0]에 (= r0로 돌려줄 값)
+ 201f002:  r0 = r0 + 4
+ 201f004:  {r15-r1} = [r0+]                ; r1..r15 복원 (60 B)
+ 201f008:  sp = r0                         ; *** 여기서도 sp를 jmp_buf로 ***
+ 201f00c:  r0 = [r0+-4]
+ 201f00e:  sp += 60
+ 201f010:  {sp, ssp, usp, icfg, psr, rets, retx, rete, reti} = [sp++]
+ 201f014:  rts
+```
 
-### 현재 가설
+`sizeof(jmp_buf)`는 정확히 **100 B**(25워드 = 16 GPR + 9워드: `machine/setjmp.h`의 `_JBLEN (16+8+1)`,
+ELF 심볼 `jmpbuf_restart` size=100)이고, 위 코드가 쓰는 범위도 정확히 그 100 B다(64 + 36).
+**버퍼 오버런은 없다.** 문제는 그 100 B가 `.bss`에 있다는 것뿐이다.
 
-**SP를 소프트웨어가 쓰는 곳은 `setjmp`/`longjmp` 뿐이다.**
+`FM1_GUARD_STACK`은 EMU의 sp 창을 `[_ustack_lo, _sstack_top]`로 잡는다(`fm1_guard.h:59-66`:
+`FM1_EMU_SSP_L/H`, `FM1_EMU_USP_L/H`, `FM1_EMU_CON |= 1<<3`). 그래서 위 `sp = jmp_buf + 64` /
+`[--sp] = {...}` 접근은 **전부 sp-창 밖 위반**이고, 첫 `setjmp`에서 `EMU_MSG bit 3 (0008)`이 뜬다.
+`DBG 0000`인 이유도 자명하다 — 쓰는 곳은 밴드가 아니라 `.bss` 안이다.
 
-- `src/picovave_p8.h:102` — 앱 프레임 루프가 **매 프레임** `setjmp(jmpbuf_restart)`
-- `femto8/src/p8_emu.c:401` — `p8_run()`의 `longjmp`
-- `femto8/src/p8_emu.c:1107` — `p8_abort()`의 `longjmp`
-- (`femto8/src/p8_emu.c:409` — 엔진 쪽 `setjmp`)
+모든 관측값이 이 하나로 설명된다:
 
-⇒ **`longjmp`가 손상된 `jmp_buf`를 복원해 SP가 야생값이 되었고, 그 다음 `setjmp`의 프롤로그 저장이
-창 밖 주소로 나가 가드가 잡았다**는 것이 가장 그럴듯한 설명이다. 이는 사진 하나로 모든 값이
-설명된다(피해자 PC가 setjmp, EMU bit 3, 야생 SP, 짧은 생존).
+| 관측 | 설명 |
+|---|---|
+| `EMU 0008` | sp 창 밖 접근 — `setjmp`가 `sp`를 `.bss`로 옮긴다 |
+| `DBG 0000` | 밴드(`_guard0`/`_guard1`)에 쓴 게 아니다 |
+| `PC 0201EFF6` = `setjmp+0x12` | `[sp+32] = r1`, 즉 스크래치 sp로 쓰는 그 명령 |
+| `f[22] = jmpbuf_restart + 0x40` | `sp = r0`(jmp_buf+64) 중간값 그대로(§5) |
+| 1,147 ms에 죽음 | 부팅(패널·빵부스러기·`p8_init`·첫 카트 로드 ≈ 1초) 뒤 **첫 프레임의 `setjmp`** |
+| 한 번도 못 뜸 / wasm은 정상 | 앱의 `setjmp`는 매 프레임 도는 필수 경로다. emscripten `setjmp`는 sp를 안 건드린다 |
+| `36251743`의 `DEEP 5731C1F4` | **오해였다.** `pv_sp_min`은 `.noinit`인데 정상 부팅 경로에서 리셋되지 않아, 콜드 부팅 시 이전 내용(쓰레기)이 그대로 남았다. 아래 수정 참고 |
 
-**아직 모르는 것**: `jmpbuf_restart`를 **누가 언제** 손상시키는가. 그리고 크래시 시점이
-1,147 / 11,210틱으로 흔들리는 이유(경합 또는 힙 레이아웃 의존).
+### 왜 Lua의 `setjmp`는 안 걸렸나
 
-### 시도했지만 원인이 아니었던 것 (다시 파지 말 것)
+`luaD_rawrunprotected`의 `struct lua_longjmp lj`는 **스택 지역변수**다. 스크래치 sp = `&lj + 64`는
+사용자 스택 창 **안**이므로 창을 위반하지 않는다. 걸리는 것은 `.bss`에 사는 앱의 `jmpbuf_restart`
+하나뿐이고, 그게 바로 `src/picovave_p8.h`의 프레임 루프 `setjmp(jmpbuf_restart)`다.
 
-- `LUAI_MAXCCALLS` 깊이 제한 — 아님.
-- 카트 메모리 범위 초과(§6b) — 카트를 넣은 적이 없으므로 아님.
-- 초기 `SP ... ABOVE`/`BELOW` 판정 — 당시 SP 계산이 핸들러 스택을 보고 있었다(§5에서 수정).
+### 수정 (적용됨, `src/picovave.c` `fm1_cstart`)
+
+1. **`FM1_GUARD_STACK` 창을 쓰지 않는다.** `fm1_guard_enable(FM1_GUARD_WRITE | FM1_GUARD_BUS |
+   FM1_GUARD_PC)` + 방어적으로 `FM1_EMU_CON &= ~(1u<<3)`. ("창을 넓히면 된다"가 아니라 **끄는 것**이
+   정답이다: 창을 RAM 전체로 넓히는 것은 사실상 끄는 것과 같고, 그 좁은 창은 newlib `setjmp`와
+   양립할 수 없다.)
+2. 남는 스택 보호: **쓰기 밴드**(`FM1_GUARD_WRITE`)가 스택 오버플로를 잡는다(실제 오버플로가 나는
+   모양이 이것이다) + `LUAI_MAXCCALLS=48`(24,320 B 스택에 맞춰 계산됨) + 부팅 화면의
+   `STACK n/24320`(`pv_stack_paint`/`pv_stack_depth`). 유일한 사각지대는 **밴드(256 B)를 건너뛰는
+   단일 프레임**이다.
+3. `pv_sp_min`/`pv_sp_bad`를 정상 부팅 경로에서도 리셋(TIMER5 시작 직전). 이제 `DEEP`이 의미를 가진다.
+4. 계측기(`pv_sp_bad`)는 소프트웨어 sp 감시로 남겨둔다 — EMU 창이 꺼졌으므로 이 ISR 검사가 유일한
+   sp 창 감시자다.
+
+### 남은 날카로운 모서리 (버그는 아니지만 기억할 것)
+
+`picovave_boot()`은 `p8_begin()`을 `setjmp` **바깥**에서 부른다(래더 루프). 카트의 `_init`이
+`reset()`/`run()`을 부르면 `p8_abort()` → `longjmp(jmpbuf_restart)`가 **죽은 프레임의 jmp_buf**로
+점프한다(첫 부팅에서는 `.bss` 0 = sp 0). 기본 카트는 그러지 않으므로 지금은 무해하다. 대책이
+필요해지면 **래더 루프 자체를 `setjmp`로 감싸고**(프레임 루프와 같은 패턴) 실패 카트로 내려보내면 된다.
+
+### 이번 크래시의 원인이 **아니었던** 것 (다시 파지 말 것)
+
+- "누군가 `jmpbuf_restart`를 손상시켜 야생 SP가 되었다" — 틀렸다. `jmp_buf`는 손상되지 않았다.
+- 카트 메모리 범위 초과(§6b) — 실제 결함이지만 크래시 원인 아님(카트를 넣은 적도 없다).
+- `LUAI_MAXCCALLS=48` — 크래시 원인은 아니지만 **여전히 필요하다**(엔진 Lua C 깊이를 24,320 B
+  스택에 맞춘다). `tools/build_picovave.py`의 주석이 "이게 크래시 원인"처럼 읽히면 그것이 오해다.
+- 초기 `SP ... ABOVE`/`BELOW` 판정, `_ustack_init` 여유(§6a) — §6a는 실제로 고친 버그지만
+  이 크래시와는 별개다.
 
 ---
 
-## 8. 소스에 들어가 있지만 **빌드되지 않은** 작업 (다음 첫 작업)
+## 8. 게이트 상태 — WIP 패치가 남긴 빨간 트리를 해소함
 
-"첫 야생 표본의 인터럽트 PC"를 잡는 계측기까지 소스에 반영했으나 **빌드가 중단되었다.**
-따라서 `build/picovave.fwsc`(태그 `36251743`)는 이 패치 **이전** 소스로 만든 것이고,
-현재 트리는 stale 입력 3개(`fm1_isr.S`, `picovave.c`, `picovave_gfx.h`) 상태다.
+이전 커밋(`78119fd`)에는 **빌드·검증 게이트 두 곳을 실패시키는 상태로 커밋된 계측기 패치**가 있었다
+(§7 수정 전에 그 원인을 찾으려고 넣은 것):
+`tools/build_picovave.py`의 MMIO 린트(`0x02000120u`, `0x02100000u` 리터럴)와
+`tools/verify_final.py`의 `fm1_timer5_irq(void)` 슬라이스(시그니처가 `(uint32_t isr_sp)`로 바뀜).
+이번에 함께 해소했다:
 
-반영된 내용:
+1. `src/picovave.c` — `pv_sp_bad_pc`의 "코드 주소인가" 판정을 리터럴 창 대신 **링커/HAL 이름**으로:
+   `FM1_XIP(FL_APP_LO)` .. `_etext`, 그리고 `.ram_text`의 `_rt_start` .. `_rt_end`(둘 다 `fm1_guard.h`).
+   이제 이 계측기는 "우리 코드가 레지스터/창을 만지지 않는다" 검사를 통과한다.
+2. `tools/verify_final.py` — ISR 슬라이스를 `fm1_timer5_irq(` ... `extern void isr_timer5(void);`로
+   바꿔 시그니처 변화에 견고하게 했다. (이전 슬라이스는 `panel_up`이 HAL 쪽으로 옮겨가면서
+   **빈 문자열**이 되어 검사가 조용히 무의미해지는 상태였다.)
 
-1. `platform/firmware/hal/fm1_isr.S` — 스텁이 `call \body` 직전에 `r0 = sp`로 저장 프레임
-   (`psr/rets/reti`)의 주소를 C 본문에 넘긴다.
-2. `src/picovave.c` — `fm1_timer5_irq(uint32_t isr_sp)`가 **두 스택 어디에도 속하지 않는 첫 표본**을
-   만나면 `pv_sp_bad`(그 SP)와 `pv_sp_bad_pc`(프레임에서 코드 주소로 보이는 워드 = 인터럽트된 PC)를
-   `.noinit`에 남긴다(`pv_stack_ok()` / `pv_stack_of()` 사용).
-3. `src/picovave_gfx.h` — 크래시 화면 11번째 밴드 `WILD <sp> <pc>` (y=222).
-4. `tools/verify_final.py` — 밴드 기하 검사를 11줄로 갱신(밴드 y: 28/50/76/94/112/130/148/166/184/204/222).
+빌드/검증 결과(태그 `cc27cc77`):
 
-**다음 단계**: 빌드 → `verify_final.py` 통과 확인 → `build/picovave-<새 태그>.fwsc` 복사 → 플래싱 →
-새 사진의 `WILD` 줄을 읽는다. 그 PC가 **SP를 망가뜨린 코드 위치**를 지목한다.
+```
+image 234196 B (slot 0x97400) · RAM .data+.bss 145608 B of 147456 · Lua heap 293888 B
+package 651271 B, identity 'SMK-37 Pro_700', tag cc27cc77
+tools/build_sim.py --engine docker   boots=31, draws=191, parity=ok
+verify_final.py                      all checks passed
+```
 
 ---
 
 ## 9. 그 다음 우선순위
 
-1. **`WILD` PC 확보** (§8) — 범인 지목. 이것 없이는 나머지가 추측이다.
-2. 확보한 PC 주변을 `longjmp` 경로(`p8_emu.c`의 `p8_run`/`p8_abort` 호출자, `p8_lua.c`의 에러 경로)와
-   대조. 카트 없는 기본 실행에서 프레임마다 `setjmp`/`longjmp`가 도는 경로가 있는지 확인.
-3. 스택 창을 **넓히는 것은 원인 대책이 아니다**(증상 완화). 창은 POOL 아래/NOINIT 위로 이미 꽉 차 있다.
+1. **실기 확인** — `build/picovave-cc27cc77.fwsc`를 플래싱하고 패널 사진 한 장. 기대: 기본 카트
+   (버튼으로 픽셀을 옮기는 화면)가 뜨고, 부팅 화면의 `STACK n/24320`이 여유를 보여준다.
+   실패하면 여전히 §2의 표로 읽는다(`PC`/`EMU`/`DBG`/`SP`/`DEEP`/`WILD`).
+2. **래더 테스트 마무리** — 롤백 사다리(최신 유효 슬롯 → 그것이 대체한 슬롯 → 내장 기본 카트 → 없음)를
+   `sim/sim_test.mjs`에 추가(깨진 카트 폴백 + 사다리 순회). §7의 "날카로운 모서리"(`_init`의
+   `reset()`)도 여기서 함께 다룰 수 있다.
+3. **BLE 결론 문서화** — picovave에는 BLE MIDI가 **없다**(USB-MIDI만). 스톡 v016 `app.bin`에만
+   BLE-MIDI GATT UUID(`03B80E5A-…`, `7772E5DB-…`)와 `BTSTACK`/`BTCTRLER`가 있었고, picovave·
+   `hello`의 `app.bin`에는 0건이다. 복구 경로로 BLE를 기대하면 안 된다 — `README.md`/`RECOVERY.md`에 적을 것.
 4. 여유가 되면 USB로 크래시 레코드를 내려받는 덤프를 추가 — 사진 판독을 없앨 수 있다.
-5. 회귀 테스트: 기본 카트로 호스트 스택 한계를 낮춰(예: `ulimit -s`) 재현되는지 시도.
+5. `tools/ota_probe.py`는 `mido` 의존이라 이 개발기에서 실행할 수 없다. 의존성 없는 경로(또는 설치)
+   중 하나를 정할 것.
 
-### 큰 함정 하나 (반드시 기억할 것)
+### 큰 함정 두 개 (반드시 기억할 것)
 
-**호스트에서는 이 버그가 재현되지 않는다.** 호스트 스택은 8 MB이고 스택 가드가 없어서, 같은
-재귀/오염이 무해하다. 세션 중 호스트에서 돌린 카트 5종이 모두 깨끗했던 이유가 이것이고,
-이 때문에 나는 한 번 잘못된 결론(카트 데이터 오염)으로 기울었다. **호스트 초록불은 기기 정상의
-증거가 아니다.**
+1. **호스트 초록불은 기기 정상의 증거가 아니다.** 호스트/emscripten의 `setjmp`는 sp를 건드리지 않고
+   스택도 8 MB다. 이번 크래시가 정확히 그 예였다(기기에서만 100% 재현, 시뮬레이터는 항상 초록).
+2. **`.bss` 레이아웃에 의존하는 버그는 호스트에서 원리적으로 안 보인다.** 기기 레이아웃을 재현하는
+   검사(호스트 + 기기 allocator + ASan)가 필요하면 `host/`·`sim/device_alloc.c`를 쓸 것.
 
 ---
 
@@ -268,20 +328,20 @@ f[24] sp`로 적고 있지만, **f[22]/f[23]은 이 실리콘에서 스택 포�
 |---|---|
 | `platform/firmware/app.ld` | `_ustack_init`/`_sstack_init` 여유(41-42), 스택/가드 상수(31-32) |
 | `platform/firmware/crt0.S` | 위 초기값 사용 |
-| `platform/firmware/hal/fm1_isr.S` | ISR 스텁이 sp를 C 본문에 전달(WIP) |
+| `platform/firmware/hal/fm1_isr.S` | ISR 스텁이 sp를 C 본문에 전달(현재 커밋에 포함) |
 | `platform/firmware/hal/fm1_guard.h` | 가드 창/비트 정의와 설명 |
 | `platform/firmware/hal/fm1_irq.h` | `fm1_crash_t`(usp/ssp 포함) + 프레임 주석(§5 주의) |
-| `src/picovave.c` | 스택 페인트/스캔(`pv_stack_paint`/`pv_stack_depth`), `pv_app_sp`, `pv_stack_of`/`pv_stack_ok`, `pv_crash_report`, 부트 마크 `pv_early_mark`, ISR 계측기(`pv_sp_min`, WIP `pv_sp_bad`) |
+| `src/picovave.c` | 스택 페인트/스캔(`pv_stack_paint`/`pv_stack_depth`), `pv_app_sp`, `pv_stack_of`/`pv_stack_ok`, `pv_crash_report`, 부트 마크 `pv_early_mark`, ISR 계측기(`pv_sp_min`, `pv_sp_bad`), **EMU 스택 창 비활성(§7 수정)**, sp 계측기 리셋(§7) |
 | `src/picovave_gfx.h` | 크래시 화면 밴드(11줄, WIP `WILD` 포함) |
 | `src/picovave_p8.h` | 프레임 루프의 프레임당 `setjmp`(102) |
 | `femto8/src/p8_lua.c` | 카트 메모리 범위 가드(`mem_ok`) |
-| `femto8/src/p8_emu.c` | `longjmp`/`setjmp` 지점(401/409/1107) — 조사 대상 |
-| `tools/verify_final.py` | 197검사, 크래시 화면 밴드 기하 검사, 엔진 범위 검사 2건 |
+| `femto8/src/p8_emu.c` | `jmpbuf_restart`/`p8_abort`/`p8_restart` — §7의 "날카로운 모서리" 참고 |
+| `tools/verify_final.py` | 199검사, 크래시 화면 밴드 기하 검사, 엔진 범위 검사 2건, ISR 슬라이스 수정(§8) |
 | `tools/build_picovave.py` | 빌드 + 기본 카트 굽기 + 태그 출력 |
 | `tools/ota_probe.py` | 플래싱/`--ask`/`--list` |
 | `tools/preview_picovave.py` | 호스트 프리뷰 빌드(크래시 화면 렌더) |
 | `tools/pvcart.py` | 기본 카트(`DEFAULT_SCRIPT`) |
-| `README.md` | 검사 수 197 갱신 |
+| `README.md` | 검사 수 199 갱신 |
 
 주의: `build/picovave/cart_default.h`와 `picovave/cdata/`는 빌드 시 생성되는 산출물이라 추적하지 않는다
 (상위 `.gitignore`).
@@ -291,5 +351,11 @@ f[24] sp`로 적고 있지만, **f[22]/f[23]은 이 실리콘에서 스택 포�
 ## 11. 다음 사람에게 필요한 것 한 가지
 
 플래싱은 비싸다(사용자가 매번 손으로 한다). 새 빌드를 드릴 때는 **한 장의 사진으로 최대한 많이
-읽히도록** 만들 것. 그리고 새 사진에서 필요한 것은 `BUILD`(무엇이 올라갔는지), `PC`, `EMU/DBG`,
-`SP`, `DEEP`, `WILD` — 이 여섯 줄이다.
+읽히도록** 만들 것.
+
+- **정상이면**: 기본 카트 화면 + 부팅 화면의 `BUILD`/`STACK n/24320`만 확인하면 된다. 그 화면이
+  뜨면 §7 수정이 맞은 것이고, 그 다음은 카트 업로드(페이지)와 래더 테스트다.
+- **죽으면**: `BUILD`(무엇이 올라갔는지), `PC`, `EMU/DBG`, `SP`, `DEEP`, `WILD` — 이 여섯 줄.
+  `EMU 0008 DBG 0000` + `PC`가 `setjmp`라면 **이번 수정이 안 들어간 패키지**인지부터 확인할 것
+  (`--ask`로 태그 확인, 기대값 `cc27cc77`).
+- 크래시 기록은 `.noinit`이라 리셋을 넘어 살아남는다. 부팅 후 10초 동안 같은 화면이 다시 뜬다.

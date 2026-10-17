@@ -286,11 +286,18 @@ def main():
     dev_c = (SRC / "src" / "picovave.c").read_text()
     cstart = dev_c[dev_c.index("void fm1_cstart(void)"):]
     loop = dev_c[dev_c.index("static void picovave_loop(void)"):]
-    isr_t5 = dev_c[dev_c.index("void fm1_timer5_irq(void)"):dev_c.index("static uint8_t panel_up")]
+    # the ISR body: fm1_timer5_irq takes the pushed frame (isr_sp) as its argument, see FM1_ISR
+    isr_t5 = dev_c[dev_c.index("void fm1_timer5_irq("):dev_c.index("extern void isr_timer5(void);")]
     check("watchdog armed before the panel comes up",
           cstart.index("fm1_wdt_arm(") < cstart.index("picovave_boot()"))
     check("every loop iteration feeds the watchdog", "fm1_wdt_feed()" in loop)
     check("the watchdog is fed from the loop, not the timer ISR", "fm1_wdt_feed(" not in isr_t5)
+    # newlib's pi32v2 setjmp/longjmp use the jmp_buf itself as a scratch stack (sp = jmp_buf + 64),
+    # and the app's jmp_buf lives in .bss - so pointing the EMU sp window at [_ustack_lo,
+    # _sstack_top] (FM1_GUARD_STACK) traps the first frame of the first boot as "EMU bit 3". The
+    # write bands, LUAI_MAXCCALLS and the boot screen's STACK line are what guard the stack now.
+    check("the EMU sp window stays unarmed (why: see picovave.c's comment at fm1_guard_enable)",
+          "FM1_GUARD_STACK" not in _nocomment(dev_c) and "FM1_EMU_CON &= ~(1u << 3)" in dev_c)
 
     # architecture check: OUR code touches no register. The device register access is
     # Makkuro37's firmware/hal (reused verbatim), not a parallel re-implementation - so the

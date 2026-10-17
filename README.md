@@ -173,7 +173,7 @@ PICO-8의 저장 그 자체다).
     python3 tools/build_sim.py --device-alloc                  # 힙을 femto8/stub/device/alloc.c로: "이 카트가 실기에서 도는가"
     python3 -m http.server -d build/sim 8738                   # → http://localhost:8738
 
-    # 3. 검증 (앱/패키지 + 화면·입력 픽셀 일치(호스트 프리뷰 ↔ wasm) + 시뮬레이터 페이지 + 실기 플래셔 교차검증, 197개 검사)
+    # 3. 검증 (앱/패키지 + 화면·입력 픽셀 일치(호스트 프리뷰 ↔ wasm) + 시뮬레이터 페이지 + 실기 플래셔 교차검증, 199개 검사)
     AC79_SDK=~/fw-AC79_AIoT_SDK python3 tools/verify_final.py
 
 준비물: JieLi pi32v2 툴체인(`~/.jieli/toolchain`), JieLi AC79 SDK, Pillow, Node.
@@ -187,7 +187,7 @@ macOS에서는 JieLi 툴체인 명령도 linux/amd64 Docker 컨테이너에서 �
 | [picovave/src/picovave_input.h](picovave/src/picovave_input.h) | 입력 모델 (hin_t: 버튼/건반/엔코더/패드/페이더/휠) — 세 소비자가 공유 |
 | [picovave/src/picovave_p8.h](picovave/src/picovave_p8.h) | 앱 계층: femto8 부팅·프레임 루프(`p8_begin`/`p8_step`)·프레임별 setjmp·입력→gamepad — 세 소비자가 공유 |
 | [picovave/src/picovave_cart.h](picovave/src/picovave_cart.h) | 카트 저장소(두 슬롯·CRC16·`seq`) + SysEx 업로드 프로토콜 — 기기/시뮬레이터가 공유 |
-| [picovave/src/picovave_gfx.h](picovave/src/picovave_gfx.h) | 240x240 RGB565 캔버스 — 기기의 OTA/복구/크래시 화면이 `hg_fb` 별칭으로 재사용. 엔진은 `-DLUAI_MAXCCALLS=48`로 컴파일된다(스톡 200은 보호 레벨당 316 B × 200 = 63 KB로 24,320 B 스택을 넘겨, Lua의 자체 가드보다 하드웨어 크래시가 먼저 왔다) | 빌드는 identity 응답의 NUL 패딩에 **자기 태그**(빌드 입력의 sha256 앞 8자리)를 실어 보내고, `ota_probe.py --ask`/`--flash`가 그것을 찍는다(패널은 마지막 프레임을 들고 있으므로 플래싱 여부의 근거가 못 된다) | `hg_crash_screen()`은 `PICOVAVE CRASH`에 PC·벡터·EMU/DBG·SP 판정·**스택 최대 사용량**·크래시 횟수·ETM을 8줄로 그린다. 기록은 `.noinit`에 남아 **다음 부팅이 같은 화면을 `LAST CRASH (BOOT)`으로 10초** 다시 그린다(놓칠 일 없음) |
+| [picovave/src/picovave_gfx.h](picovave/src/picovave_gfx.h) | 240x240 RGB565 캔버스 — 기기의 OTA/복구/크래시 화면이 `hg_fb` 별칭으로 재사용. 엔진은 `-DLUAI_MAXCCALLS=48`로 컴파일된다(스톡 200은 보호 레벨당 316 B × 200 ≈ 63 KB로 24,320 B 스택을 넘겨, 깊은 카트에서 Lua의 자체 가드보다 하드웨어 폴트가 먼저 온다) | 빌드는 identity 응답의 NUL 패딩에 **자기 태그**(빌드 입력의 sha256 앞 8자리)를 실어 보내고, `ota_probe.py --ask`/`--flash`가 그것을 찍는다(패널은 마지막 프레임을 들고 있으므로 플래싱 여부의 근거가 못 된다) | `hg_crash_screen()`은 `PICOVAVE CRASH`에 PC·벡터·EMU/DBG·SP 판정·**스택 최대 사용량**·크래시 횟수·ETM을 8줄로 그린다. 기록은 `.noinit`에 남아 **다음 부팅이 같은 화면을 `LAST CRASH (BOOT)`으로 10초** 다시 그린다(놓칠 일 없음) |
 | [picovave/femto8/](picovave/femto8/) | vendored PICO-8(femto8) 엔진 — **9개의 문서화된 패치**만 적용([femto8/README.picovave.md](femto8/README.picovave.md)) |
 | [picovave/src/picovave.c](picovave/src/picovave.c) | 기기 진입점 + hh_* HAL + 패널 푸시(RGB565 BE 스왑) + ALNK0/TIMER5 ISR + USB/OTA/카트 글루 |
 | [picovave/platform/firmware/{hal,src}](picovave/platform/firmware/hal) | 실기 HAL · 패널 + USB/OTA + 로더 (Makkuro37에서 vendor한 사본 — picovave 자기완결) |
@@ -236,5 +236,10 @@ macOS에서는 JieLi 툴체인 명령도 linux/amd64 Docker 컨테이너에서 �
   호스트 파서가 막히지 않는다(SLOOP/dinghy의 `sx_open` 수정을 vendored `usb.c`에 이식).
 - **USB로 안 잡히는 기기(예: USB 스택 없는 옛 빌드) 복구** — mask-ROM UBOOT(`WL82 UBOOT1.00`)에
   `jl-uboot-tool`로 app 영역(`0x4000-0x9CFFF`)만 쓴다. 전체 절차는 [docs/RECOVERY.md](docs/RECOVERY.md).
+- **BLE MIDI는 없다 — 복구 경로로 기대하지 말 것.** 스톡 v016 `app.bin`에는 BLE-MIDI GATT
+  (`03B80E5A-EDE8-4B33-A751-6CE34EC4C700` / `7772E5DB-3868-4112-A1A9-F2669D106BF3`), 광고 이름
+  `SMK-37 Pro_016`, `BTSTACK`/`BTCTRLER`가 들어 있지만, 그것은 **우리가 교체하는 app 영역 안**에 있다.
+  picovave(`app.bin`)에는 셋 다 0건이다 — 즉 picovave에는 BLE 스택이 없고 MIDI는 **USB-MIDI만**
+  이다. 탈출구는 (a)~(d)의 USB/mask-ROM 경로뿐이다.
 
 비공식 펌웨어이며 설치 책임은 사용자에게 있다.
