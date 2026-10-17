@@ -99,6 +99,15 @@ static void picovave_frame(void)      /* one 1/30 s tick */
     steps = (m_fps >= 60u) ? 2u : 1u;
 
     for (i = 0; i < steps; i++) {
+        /* THE harness's setjmp. Two things to know before touching it:
+         *   - it must be re-established every frame: setjmp() saves the CURRENT sp, so a jmp_buf
+         *     left over from another call depth is a jump into a dead frame;
+         *   - picovave_boot() runs the ladder's p8_begin() OUTSIDE any setjmp, so a cart whose
+         *     _init calls reset()/run() longjmps into whatever jmpbuf_restart last held. The
+         *     default cart does not, and a cart that does would have to be handled by wrapping the
+         *     ladder the same way this loop wraps the frame (docs/HANDOVER.md §7).
+         * (The device's hardware sp window is deliberately not armed: this jmp_buf is a .bss global
+         * and newlib's setjmp points sp into it. See the comment at fm1_guard_enable.) */
         if (setjmp(jmpbuf_restart)) {
             /* a cart's reset()/run() unwound here: reinitialise and carry on */
             if (p8_begin() != 0)

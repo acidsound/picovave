@@ -144,7 +144,8 @@ static void hg_crash_screen(const hg_crash_t *c)
     *p = 0;
 
     /* The stack grows down from stack_top, so a pointer under stack_lo is the overflow the
-     * guard exists to catch - and that is what tells a deep cart apart from a smashed SP. */
+     * write bands exist to catch - and that is what tells a deep cart apart from an sp that
+     * left the stacks. Note c->sp is the fault HANDLER's stack pointer, not the app's. */
     p = hg_put(l[2], "SP ", c->sp, 8);
     if (c->sp_tag) {
         *p++ = ' ';
@@ -195,8 +196,9 @@ static void hg_crash_screen(const hg_crash_t *c)
 #endif
     /* Which build drew this, in every photograph of it: "the same screen again" is otherwise
      * impossible to tell from "the new image never ran" (the LCD keeps its last frame). */
-    /* The tick whose interrupted code was on neither stack, with the pc it was interrupted at:
-     * only setjmp()/longjmp() write sp, so this names the longjmp that restored a damaged buffer. */
+    /* The tick whose interrupted code was on neither stack, with the pc it was interrupted at.
+     * Nothing legitimate runs with sp outside both windows, so a non-zero value here is a real
+     * find: a longjmp() into a dead frame, or setjmp()'s own scratch sp caught mid-prologue. */
     p = hg_put(l[5], "WILD ", c->sp_bad, 8);
     p = hg_put(p, " ", c->sp_bad_pc, 8);
     *p = 0;

@@ -88,12 +88,15 @@ static void pv_blit(void) { if (panel_up) lcd_blit(0u, 0u, HG_W, HG_H, p8_panel_
  * interesting question is how deep it really goes. Painting the unused stack at boot and
  * scanning it later answers that on the panel: at boot it reports what the previous run used
  * (also when that run was perfectly healthy), and on a fault it reports the high-water mark
- * next to the stack pointer, which separates a cart that recurses too far from a smashed SP.
- * 0.._ustack_lo is the guard band between the stack and the Lua heap: never written here. */
-/* Which stack the app itself was on, and how deep. f[24] sp is the HANDLER's: the vector stub
- * pushed it, so it always reads "just under a stack top" and cannot tell a deep stack from a
- * smashed one. f[22]/f[23] are the interrupted code's own usp/ssp, so the one that is no longer
- * at its start value is the one the app was running on. */
+ * next to the stack pointer, which separates a cart that recurses too far from a stack pointer
+ * that left both windows altogether (a longjmp into a dead frame, or setjmp's own prologue:
+ * see pv_sp_bad). 0.._ustack_lo is the guard band between the stack and the Lua heap: never
+ * written here. */
+/* Which stack the app itself was on, and how deep. Only f[24] (the HANDLER's sp, pushed by the
+ * vector stub) can be trusted - and it always reads "just under a stack top", so it cannot tell a
+ * deep stack from a shallow one. f[22]/f[23] are NOT stack pointers on this silicon: f[22] holds
+ * the value setjmp() had just put in sp (see fm1_guard_enable's comment). The paint scan below and
+ * the ISR's pv_sp_min are what answer "how deep", which is why they exist. */
 /* Which stack region an address falls in: 'U' user, 'S' supervisor, '?' neither. */
 static int pv_stack_ok(uint32_t a)
 {
@@ -139,8 +142,10 @@ static uint32_t pv_app_sp(const fm1_crash_t *c, char *tag, uint32_t *lo, uint32_
  * is reset just before the tick starts so the number always belongs to the run that died. */
 static uint32_t pv_sp_min __attribute__((section(".noinit")));
 /* The first tick whose interrupted code was NOT on one of our two stacks, with the pc it was
- * interrupted at. Only setjmp()/longjmp() write sp, so a sample like that means a longjmp()
- * restored a damaged jmp_buf - and the pc names the moment it happened. */
+ * interrupted at. Two things can put sp outside both windows: a longjmp() into a dead frame (see
+ * the restart notes in picovave_p8.h), and setjmp() itself, which points sp at the jmp_buf for the
+ * few instructions of its prologue (see the comment at fm1_guard_enable in picovave.c) - a 10 kHz
+ * sample landing inside those is unlikely but not impossible, so read this together with the pc. */
 static uint32_t pv_sp_bad __attribute__((section(".noinit")));
 static uint32_t pv_sp_bad_pc __attribute__((section(".noinit")));
 
@@ -194,11 +199,12 @@ static void hh_input_init(void) { fm1_input_init(); }
  * panel then shows the LAST stage until the first real frame replaces it. 1 = time/LCD/input,
  * 2 = engine init, 3 = cart decoded, 4 = cart started, 5 = first frame done. */
 /* The fault screen is up for three seconds before the reset, which is not long enough to copy
- * anything down - and the numbers it shows are what tells a deep cart apart from a smashed SP.
- * The record lives in .noinit and survives the reset, so the boot AFTER the crash draws the
- * same picture and holds it: read it, photograph it, or hold any button to skip. Shown once
- * (the magic is cleared), and 10 s is well inside the 30 s the bootguard needs to call a boot
- * healthy, so the report cannot be mistaken for a failed boot. */
+ * anything down - and the numbers it shows (the PC, the guard bits, the painted high-water mark)
+ * are what tells a deep cart apart from an sp that left the stacks. The record lives in .noinit
+ * and survives the reset, so the boot AFTER the crash draws the same picture and holds it: read
+ * it, photograph it, or hold any button to skip. Shown once (the magic is cleared), and 10 s is
+ * well inside the 30 s the bootguard needs to call a boot healthy, so the report cannot be
+ * mistaken for a failed boot. */
 #define PV_REPORT_MS 10000u
 static void pv_crash_report(void)
 {

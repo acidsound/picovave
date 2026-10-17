@@ -14,9 +14,9 @@
 | wasm 시뮬레이터 / 호스트 프리뷰 / 기기 | 같은 엔진, 화면 **픽셀 단위 일치** (`tools/verify_final.py` 통과, "all checks passed") |
 | 펌웨어 부팅 | **원인 확정·수정 완료.** 원인은 "야생 SP"가 아니라 **newlib `setjmp`의 sp 사용 vs 하드웨어 EMU 스택 창**이었다(§7) |
 | 원인 규명 | **100%** — 디스어셈블리로 증명(§7). 피해자는 `setjmp`, 가해자도 `setjmp` |
-| 실기 사용 가능 여부 | **확인 대기** — 태그 `cc27cc77` 패키지가 첫 "부팅 기대" 빌드다. 사진 한 장이면 확정된다(§11) |
+| 실기 사용 가능 여부 | **확인 대기** — 태그 `68c5e5f1` 패키지가 첫 "부팅 기대" 빌드다. 사진 한 장이면 확정된다(§11) |
 
-build/`picovave.fwsc`(태그 `cc27cc77`)가 이 수정을 담은 패키지다. 이전 커밋(`78119fd`)의 반쯤 적용된
+build/`picovave.fwsc`(태그 `68c5e5f1`)가 이 수정을 담은 패키지다. 이전 커밋(`78119fd`)의 반쯤 적용된
 계측기 패치는 **빌드·검증 게이트 두 곳을 빨갛게 만든 상태로 커밋**되어 있었다 — 이번에 함께 해소했다(§8).
 
 ---
@@ -287,11 +287,11 @@ ELF 심볼 `jmpbuf_restart` size=100)이고, 위 코드가 쓰는 범위도 정�
    바꿔 시그니처 변화에 견고하게 했다. (이전 슬라이스는 `panel_up`이 HAL 쪽으로 옮겨가면서
    **빈 문자열**이 되어 검사가 조용히 무의미해지는 상태였다.)
 
-빌드/검증 결과(태그 `cc27cc77`):
+빌드/검증 결과(태그 `68c5e5f1`):
 
 ```
 image 234196 B (slot 0x97400) · RAM .data+.bss 145608 B of 147456 · Lua heap 293888 B
-package 651271 B, identity 'SMK-37 Pro_700', tag cc27cc77
+package 651271 B, identity 'SMK-37 Pro_700', tag 68c5e5f1
 tools/build_sim.py --engine docker   boots=31, draws=191, parity=ok
 verify_final.py                      all checks passed
 ```
@@ -300,7 +300,7 @@ verify_final.py                      all checks passed
 
 ## 9. 그 다음 우선순위
 
-1. **실기 확인** — `build/picovave-cc27cc77.fwsc`를 플래싱하고 패널 사진 한 장. 기대: 기본 카트
+1. **실기 확인** — `build/picovave-68c5e5f1.fwsc`를 플래싱하고 패널 사진 한 장. 기대: 기본 카트
    (버튼으로 픽셀을 옮기는 화면)가 뜨고, 부팅 화면의 `STACK n/24320`이 여유를 보여준다.
    실패하면 여전히 §2의 표로 읽는다(`PC`/`EMU`/`DBG`/`SP`/`DEEP`/`WILD`).
 2. **래더 테스트 마무리** — 롤백 사다리(최신 유효 슬롯 → 그것이 대체한 슬롯 → 내장 기본 카트 → 없음)를
@@ -357,5 +357,5 @@ verify_final.py                      all checks passed
   뜨면 §7 수정이 맞은 것이고, 그 다음은 카트 업로드(페이지)와 래더 테스트다.
 - **죽으면**: `BUILD`(무엇이 올라갔는지), `PC`, `EMU/DBG`, `SP`, `DEEP`, `WILD` — 이 여섯 줄.
   `EMU 0008 DBG 0000` + `PC`가 `setjmp`라면 **이번 수정이 안 들어간 패키지**인지부터 확인할 것
-  (`--ask`로 태그 확인, 기대값 `cc27cc77`).
+  (`--ask`로 태그 확인, 기대값 `68c5e5f1`).
 - 크래시 기록은 `.noinit`이라 리셋을 넘어 살아남는다. 부팅 후 10초 동안 같은 화면이 다시 뜬다.
