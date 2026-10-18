@@ -88,7 +88,13 @@ const uint8_t *hh_cart_data(void)
 }
 uint32_t hh_cart_size(void)
 {
-    return pv_run_slot >= 0 ? PV_COOKED_SIZE : (uint32_t)cart_default_len;
+    if (pv_run_slot < 0)
+        return (uint32_t)cart_default_len;
+    return pv_cart.slot_len[(uint8_t)pv_run_slot] - PV_COOKED_MAGIC_LEN;
+}
+int hh_cart_kind(void)
+{
+    return pv_run_slot >= 0 ? (int)pv_cart.slot_kind[(uint8_t)pv_run_slot] : 0;
 }
 int hh_cart_next(void) { return pv_run_next(); }
 void hh_boot_stage(int stage) { (void)stage; }   /* no panel here; the page shows its own status */

@@ -2605,40 +2605,36 @@ void lua_print_error()
         print_script_context(filename, lineno);
 }
 
-int lua_init_script(const char *file_name, const char *script)
+/* picovave: the part every load shares. A NEW cart invalidates the callbacks the previous one
+ * left behind: these four are only ever SET - by the discovery below and by the lazy re-checks in
+ * lua_update()/lua_draw() - and never cleared, so a cart that defines no `_update` inherited the
+ * previous cart's cached pointer, whose function object the load had already collected; the frame
+ * driver then called a nil `_update` and the cart died at frame 0 with "attempt to call a nil
+ * value". picovave loads cart after cart in ONE process (an upload IS a boot), so this is not a
+ * hypothetical: it is the path that used to break. `m_fps` goes back to its default here too. */
+static void lua_prepare_load(const char *file_name, char *temp_file_name, size_t cap)
 {
     if (!L)
         L = luaL_newstate();
 
-    char temp_file_name[PATH_MAX + 1];
     temp_file_name[0] = '@';
     if (file_name)
-        strtcpy(temp_file_name + 1, file_name, PATH_MAX);
+        strtcpy(temp_file_name + 1, file_name, cap - 1);
     else
         temp_file_name[1] = '\0';
 
     lua_settop(L, 0);
 
-    /* picovave: a NEW cart invalidates the callbacks the previous one left behind. These four are
-     * only ever SET - by the discovery below and by the lazy re-checks in lua_update()/lua_draw()
-     * - and never cleared, so a cart that defines no `_update` inherited the previous cart's
-     * cached pointer, whose function object the load had already collected; the frame driver then
-     * called a nil `_update` and the cart died at frame 0 with "attempt to call a nil value".
-     * picovave loads cart after cart in ONE process (an upload IS a boot), so this is not a
-     * hypothetical: it is the path that used to break. `m_fps` goes back to its default here too
-     * (it is otherwise no better than the last cart's). */
     m_lua_update = NULL;
     m_lua_update60 = NULL;
     m_lua_draw = NULL;
     m_lua_init = NULL;
     m_fps = 30;
+}
 
-    size_t script_len = strnlen(script, LUA_SCRIPT_SIZE);
-    m_status = luaL_loadbuffer(L, script, script_len, temp_file_name);
-
-    if (m_status)
-        return m_status;
-
+/* Run the chunk and find the cart's callbacks. */
+static int lua_run_and_discover(void)
+{
     m_status = lua_pcall(L, 0, 0, 0);
 
     if (m_status)
@@ -2679,6 +2675,41 @@ int lua_init_script(const char *file_name, const char *script)
     }
 
     return 0;
+}
+
+int lua_init_script(const char *file_name, const char *script)
+{
+    char temp_file_name[PATH_MAX + 1];
+    size_t script_len;
+
+    lua_prepare_load(file_name, temp_file_name, sizeof temp_file_name);
+
+    script_len = strnlen(script, LUA_SCRIPT_SIZE);
+    m_status = luaL_loadbuffer(L, script, script_len, temp_file_name);
+
+    if (m_status)
+        return m_status;
+
+    return lua_run_and_discover();
+}
+
+/* picovave: a cart the page already compiled (src/picovave_cart.h "PVB1"). The chunk is read in
+ * place out of the caller's buffer - on the device that is the SLOOP slot through XIP, so not one
+ * byte of it is copied into the pool. Mode "b" makes lua_load take the binary path; luaU_undump
+ * then checks the header's sizeof(int/size_t/Instruction/lua_Number) and the byte order, so a
+ * chunk built by a different ABI is refused instead of misread. */
+int lua_init_script_bc(const char *file_name, const uint8_t *bc, uint32_t size)
+{
+    char temp_file_name[PATH_MAX + 1];
+
+    lua_prepare_load(file_name, temp_file_name, sizeof temp_file_name);
+
+    m_status = luaL_loadbufferx(L, (const char *)bc, (size_t)size, temp_file_name, "b");
+
+    if (m_status)
+        return m_status;
+
+    return lua_run_and_discover();
 }
 
 int lua_call_function(const char *name, int ret)

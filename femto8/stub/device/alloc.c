@@ -18,7 +18,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* The arena IS the linker's POOL region (app.ld), minus a red zone. Sizing it
+/* The arena is the linker's POOL region (app.ld), minus a red zone. Sizing it
  * from the script instead of a fixed array means a repartition of RAM/POOL moves
  * the Lua heap with it - and how much Lua gets is exactly POOL - (the engine's
  * 271,872 B) - (the red zone). build_picovave.py asserts that remainder.

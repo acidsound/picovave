@@ -64,7 +64,7 @@ const probe = async (name, payload, frames, arena) => {
   const feed = (m) => { new Uint8Array(p.memory.buffer, p.sim_sysex_in(), m.length).set(m); return p.sim_sysex(m.length); };
   p.sim_init();
   if (payload) {
-    const slot = p.sim_cart_active() === 1 ? 0 : 1;
+    const slot = 0;   // one cart at a time: the store has a single slot
     feed(frame(0x01, [slot, ...le7(payload.length, 3), nm(name).length, ...nm(name)]));
     for (let off = 0; off < payload.length; off += 128) {
       const c = payload.subarray(off, off + 128);

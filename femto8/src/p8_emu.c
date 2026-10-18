@@ -86,6 +86,13 @@ char    *m_temp_lua_script  = NULL;
 static const uint8_t *m_cooked = NULL;
 static uint32_t m_cooked_size = 0;
 
+/* picovave: a cart the page already compiled. m_bytecode points into the caller's payload (the
+ * device's SLOOP slot through XIP), right after the cartridge ROM and its u32 length; Lua reads
+ * it in place with luaL_loadbufferx(..., "b"), so there is no source buffer to materialise and no
+ * compiler to run - the two costs this path exists to remove. NULL means "a cooked cart". */
+static const uint8_t *m_bytecode = NULL;
+static uint32_t m_bytecode_size = 0;
+
 static int p8_materialize_script(void);
 static void p8_release_script(void);
 
@@ -108,7 +115,7 @@ char m_current_cart_dir[PV_CART_PATH_MAX];
 char m_current_cart_file_name[PV_CART_PATH_MAX];
 char m_breadcrumb[256];
 char m_param_string[256];
-char m_clipboard[1024];
+char m_clipboard[256];
 
 static bool skip_main_loop_if_no_callbacks = false;
 
@@ -356,10 +363,47 @@ int p8_load_cooked(const uint8_t *cooked, uint32_t size)
 
     m_cooked = cooked;
     m_cooked_size = size;
+    m_bytecode = NULL;                     /* this cart is source, not a precompiled chunk */
+    m_bytecode_size = 0;
     m_cart_memory = (uint8_t *)cooked;     /* read-only: see the note on m_cooked above */
 
     p8_release_script();                   /* whatever a previous load left is Lua's now */
     return p8_materialize_script();
+}
+
+/* picovave: run a cart the page already compiled (src/picovave_cart.h's "PVB1" payload).
+ *
+ * payload is the slot's payload past its 4-byte wire magic:
+ *   [0, CART_MEMORY_SIZE)                 the cartridge ROM, read in place like p8_load_cooked's
+ *   [CART_MEMORY_SIZE, +4)                u32 bytecode length, little-endian
+ *   [CART_MEMORY_SIZE + 4, +len)          the bytecode
+ *
+ * Nothing is copied and nothing is compiled: lua_init_script_bc() hands the chunk straight to
+ * luaL_loadbufferx() with mode "b". The caller's buffer must stay readable for as long as the
+ * cart runs (the device's SLOOP slot through XIP; the simulator's store array). */
+int p8_load_bytecode(const uint8_t *payload, uint32_t n)
+{
+    uint32_t len;
+
+    assert(m_initialized);
+
+    if (!payload || n <= (uint32_t)CART_MEMORY_SIZE + 4u)
+        return -1;
+    len = (uint32_t)payload[CART_MEMORY_SIZE]
+        | ((uint32_t)payload[CART_MEMORY_SIZE + 1] << 8)
+        | ((uint32_t)payload[CART_MEMORY_SIZE + 2] << 16)
+        | ((uint32_t)payload[CART_MEMORY_SIZE + 3] << 24);
+    if (len == 0 || len != n - (uint32_t)CART_MEMORY_SIZE - 4u)
+        return -1;
+
+    m_cooked = NULL;
+    m_cooked_size = 0;
+    m_cart_memory = (uint8_t *)payload;    /* read-only: the ROM half */
+    m_bytecode = payload + CART_MEMORY_SIZE + 4;
+    m_bytecode_size = len;
+
+    p8_release_script();
+    return 0;
 }
 
 /* Expand the cooked cart's code section into m_lua_script, allocated here and released by
@@ -417,6 +461,21 @@ static void p8_release_script(void)
     m_lua_script = NULL;
 }
 
+/* Give Lua the cart's chunk: a precompiled one straight from the payload, or the source that
+ * p8_materialize_script() expands (and that is released again the moment Lua owns the Proto). */
+static int p8_load_chunk(void)
+{
+    int ret;
+    if (m_bytecode)
+        return lua_init_script_bc(m_current_cart_file_name, m_bytecode, m_bytecode_size);
+    ret = p8_materialize_script();
+    if (ret != 0)
+        return ret;
+    ret = lua_init_script(m_current_cart_file_name, m_lua_script);
+    p8_release_script();
+    return ret;
+}
+
 int p8_run(void)
 {
     assert(m_initialized);
@@ -442,15 +501,9 @@ int p8_run(void)
 
     cart_running = true;
 
-    int ret = p8_materialize_script();     /* p8_reset_cart() just closed the last cart's state,
-                                            * so the 64 KiB source buffer fits again */
-    if (ret != 0) {
-        cart_running = false;
-        return ret;
-    }
-
-    ret = lua_init_script(m_current_cart_file_name, m_lua_script);
-    p8_release_script();                   /* Lua has the compiled chunk; the heap gets it back */
+    /* p8_reset_cart() just closed the last cart's state, so a source buffer would fit again.
+     * A precompiled chunk needs none: it is read in place out of the payload. */
+    int ret = p8_load_chunk();
     if (ret != 0) {
         cart_running = false;
         return ret;
@@ -495,14 +548,7 @@ int p8_begin(void)
 
     cart_running = true;
 
-    int ret = p8_materialize_script();
-    if (ret != 0) {
-        cart_running = false;
-        return ret;
-    }
-
-    ret = lua_init_script(m_current_cart_file_name, m_lua_script);
-    p8_release_script();                   /* Lua has the compiled chunk; the heap gets it back */
+    int ret = p8_load_chunk();
     if (ret != 0) {
         cart_running = false;
         return ret;
@@ -666,7 +712,7 @@ static uint8_t high_color_resolve(uint8_t hc_mode, uint8_t pix_index, int sx, in
         // 5-bitplane mode: requires 0x5f2c == 1 (horizontal stretch).
         // If the corresponding pixel in the hidden right half (sx+64) is
         // non-zero, use secondary palette.
-        int hidden_offset = (m_memory[MEMORY_SCREEN_PHYS] << 8) + ((sx + 64) >> 1) + sy * 64;
+        int hidden_offset = (m_memory[MEMORY_SCREEN_PHYS] << 8) + (((sx + 64) & 0x7F) >> 1) + sy * 64;
         uint8_t hidden_val = m_memory[hidden_offset];
         uint8_t hidden_pix = IS_EVEN(sx + 64) ? (hidden_val & 0xF) : (hidden_val >> 4);
         if (hidden_pix != 0)

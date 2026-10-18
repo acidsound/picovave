@@ -490,16 +490,21 @@ def main():
     check("the cart controls name both targets (SIMULATOR / FLASH(USB))",
           "CART_TARGETS" in page and '"FLASH(USB)"' in page)
     usb_cart = page.split("async function uploadCartUsb", 1)[-1].split("function uploadCart(", 1)[0]
-    check("FLASH(USB) carts are the SIMULATOR path on the wire (same frames, same slots)",
+    check("FLASH(USB) carts are the SIMULATOR path on the wire (same frames, the same one slot)",
           "cartFrames(" in usb_cart and "cartUsbSend(" in usb_cart
-          and "cartSlot ^= 1" in usb_cart and "cartUsbLink(" in usb_cart)
+          and "CART_SLOT" in usb_cart and "cartUsbLink(" in usb_cart)
     check("FLASH(USB) carts open the same Web MIDI link the package flasher uses",
           "async function cartUsbLink" in page and "WebMidiBackend.request()" in page)
     check("the SIMULATOR cart path still hands the wasm its own frames",
           "cartFrames(" in page.split("function uploadCartSim", 1)[-1].split("async function cartReply", 1)[0])
     check("the FLASH(USB) cart reads the device's own cart replies",
           "async function cartReply" in page and "0x7E" in page)
-    check("both cart targets write the slot that is NOT running", page.count("cartSlot ^= 1") >= 2)
+    # One cart at a time (src/picovave_cart.h: PV_SLOT_COUNT 1): both targets write slot 0, so
+    # there is no "the other slot" to hide behind and no rollback slot to fall back to - the
+    # ladder's floor is the embedded cart.
+    check("both cart targets write the one slot (no rollback slot)",
+          page.count("CART_SLOT") >= 2 and "cartSlot" not in page
+          and "PV_SLOT_COUNT   1u" in (SRC / "src" / "picovave_cart.h").read_text())
     # The one cart format: the page takes a .p8.png, and unwraps it with its own module (shared
     # with the Node tests, so the bytes the hardware gets are the bytes the tests upload).
     check("the page takes only .p8.png carts", 'accept=".p8.png"' in page
@@ -924,6 +929,21 @@ def main():
           and "PV_CART_LEN" in cart_h_raw and "PV_E_FMT" in cart_h_raw)
     check("BEGIN refuses anything that is not a cooked cart, and a slot without the magic is skipped",
           "len != PV_CART_LEN" in cart_h_raw and "memcmp(m, PV_COOKED_MAGIC" in cart_h_raw)
+    # A page-compiled cart ("PVB1"): the same cartridge ROM, then Lua bytecode. The page builds the
+    # chunk with the DEVICE's own Lua (tools/luabc.c -> build_luabc.py), and the device hands it to
+    # luaL_loadbufferx("b") - so it never expands the source and never runs the compiler. The slot
+    # budget is arithmetic on the store's own constants, not a second hardcoded number.
+    lua_c = (SRC / "femto8" / "src" / "p8_lua.c").read_text()
+    check("a precompiled cart is a payload the slot can hold",
+          "PV_ROM_SIZE" in cart_h_raw and "PV_BCODE_MAGIC" in cart_h_raw
+          and "PV_BC_HDR" in cart_h_raw and "PV_BC_MAX" in cart_h_raw
+          and "PV_SLOT_PAYLOAD" in cart_h_raw)
+    check("the device undumps a precompiled chunk instead of compiling the source",
+          "p8_load_bytecode(" in engine_c and "luaL_loadbufferx(" in lua_c
+          and "p8_load_chunk(" in engine_c)
+    check("the page's compiler is built from the device's own Lua",
+          (SRC / "tools" / "luabc.c").exists() and (SRC / "tools" / "build_luabc.py").exists()
+          and "femto8/src/lua" in (SRC / "tools" / "build_luabc.py").read_text())
     check("the device expands the code section with femto8's own decompressor",
           "p8_load_cooked(" in engine_c and "pico8_code_section_decompress(" in engine_c)
     check("the expansion buffer is sized to the cart's own script, not to the 64 KiB maximum",

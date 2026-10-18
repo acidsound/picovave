@@ -51,6 +51,7 @@ int32_t  picovave_status;             /* 0 while running, else the last engine e
 /* Provided by the target. */
 extern const uint8_t *hh_cart_data(void);
 extern uint32_t       hh_cart_size(void);
+extern int            hh_cart_kind(void);   /* 0: cooked cart, 1: precompiled bytecode */
 extern int            hh_cart_next(void);   /* 0: this was the last one the target can offer */
 extern void           hh_boot_stage(int stage);
 
@@ -168,7 +169,9 @@ static void picovave_boot(void)       /* everything before the loop; re-runnable
 
         p = hh_cart_data();
         n = hh_cart_size();
-        if (p && p8_load_cooked(p, n) == 0) {
+        /* The page may have compiled the cart already: then the payload is the ROM plus the
+         * bytecode, and the device never materialises the source or runs the compiler. */
+        if (p && (hh_cart_kind() ? p8_load_bytecode(p, n) : p8_load_cooked(p, n)) == 0) {
             hh_boot_stage(3);
             if (p8_begin() == 0) {
                 picovave_status = 0;          /* THIS candidate runs: the ones before it do not count */

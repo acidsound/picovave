@@ -19,6 +19,16 @@ const wasmArg = args.find((a) => a.endsWith(".wasm"));
 const wasmPath = wasmArg || path.join(here, "sim.wasm");
 const outPath = args.find((a) => !a.endsWith(".wasm")) || null;
 
+// luabc.mjs fetches its wasm relative to itself (a file: URL under Node); in the browser the page
+// serves it from the same directory. Point that one request at the file next to the simulator.
+const realFetch = globalThis.fetch;
+globalThis.fetch = async (u) => {
+  const s = String(u);
+  if (s.endsWith("/luabc.wasm"))
+    return new Response(fs.readFileSync(path.join(path.dirname(wasmPath), "luabc.wasm")));
+  return realFetch(u);
+};
+
 const bytes = fs.readFileSync(wasmPath);
 
 let mem = null;
@@ -120,12 +130,15 @@ check("sim_render advanced the audio clock", ex.sim_boots() > bootsBefore,
 // PXA-compressed code section, which only femto8's expander (compiled into this wasm exactly as
 // the device compiles it) can read. That is the check that the .p8.png path works end to end.
 import { cartPayload, cookedFromScript, CART_LEN, COOKED_SIZE, COOKED_MAGIC } from "./p8png.mjs";
+// The page's cart compiler (the DEVICE's Lua built for wasm32, tools/build_luabc.py). It is served
+// next to the page, so it is next to this file too.
+import { compileCart } from "./luabc.mjs";
 
 // The device's whole heap for the engine and Lua: app.ld's arena (the RAM region from the end of
 // .bss to the stack guard, 414,184 B) less the allocator's 1 KiB red zone - the number
 // tools/build_picovave.py prints. sim_heap_peak() is that same pool measured here by the device's
 // own allocator (sim/device_alloc.c), so the two are directly comparable.
-const DEVICE_HEAP = 414184 - 1024;
+const DEVICE_HEAP = 414936 - 1024;
 
 const cartDir = path.join(path.dirname(wasmPath), "carts");
 let fixtures = [];
@@ -178,13 +191,14 @@ if (fixtures.length) {
   // A text .p8 is not a cart: BEGIN's length is the format gate, so nothing is erased or written.
   const text = Buffer.from("pico-8 cartridge // http://www.pico-8.com\nversion 16\n__lua__\n" +
                            "function _init() end\nfunction _update() end\nfunction _draw() cls(8) end\n");
-  feed(frame(0x01, [1, ...le7(text.length, 3), 4, ...nm("t.p8")]));
+  feed(frame(0x01, [0, ...le7(text.length, 3), 4, ...nm("t.p8")]));
   check("a text .p8 is refused (not a cooked cart)", reply()[5] === 0x11 && reply()[6] === 7,
         "reply=" + Array.from(reply().slice(5, 8)).join(","));
   check("...and nothing was committed", ex.sim_cart_active() === -1, "active=" + ex.sim_cart_active());
 
-  // A wrong CRC must be refused: nothing commits, so the running cart is untouched.
-  upload(1, nm("bad.p8.png"), payloadA);
+  // A wrong CRC must be refused: nothing commits. (With one slot, BEGIN has already erased the
+  // cart that was there, so the ladder's floor is the embedded cart - not "the cart is untouched".)
+  upload(0, nm("bad.p8.png"), payloadA);
   feed(frame(0x03, le7((crc16(payloadA) ^ 1) & 0xFFFF, 3)));
   check("a bad CRC is refused", ex.sim_cart_active() === -1 && reply()[5] === 0x11,
         "active=" + ex.sim_cart_active());
@@ -219,36 +233,41 @@ if (fixtures.length) {
         li[10] === fixtures[0].length && replyOk(6),
         "info=" + Array.from(li.slice(0, 13)).join(","));
 
-  // The decisive one: upload a cart that fills the panel (to slot 1 - the slot that is NOT
-  // running) and the engine must switch to it. Its code section is the RAW form, so this also
-  // covers the pre-0.1.7 branch - the one the baked default cart uses.
+  // The decisive one: upload a cart that fills the panel and the engine must switch to it. With
+  // ONE slot there is nowhere else to put it, so this upload REPLACES the cart above - the trade
+  // that buys a cart the whole 120 KiB store (a precompiled payload needs it). Its code section is
+  // the RAW form, so this also covers the pre-0.1.7 branch - the one the baked default cart uses.
   const fillCooked = cookedFromScript("function _init() end\nfunction _update() end\nfunction _draw() cls(8) end\n");
   const fill = new Uint8Array(CART_LEN);
   fill.set(COOKED_MAGIC, 0);
   fill.set(fillCooked, COOKED_MAGIC.length);
   const litBefore = nonBlack(snap());
-  upload(1, nm("fill.p8.png"), fill);
+  upload(0, nm("fill.p8.png"), fill);
   const re2 = feed(frame(0x03, le7(crc16(fill), 3)));
-  check("a second upload takes over (newest slot wins)", re2 === 1 && ex.sim_cart_active() === 1,
+  check("a second upload replaces the one cart", re2 === 1 && ex.sim_cart_active() === 0,
         "active=" + ex.sim_cart_active());
   for (let i = 0; i < 8; i++) ex.sim_frame();
   check("the engine runs the uploaded cart (it filled the panel)",
         nonBlack(snap()) > 50000 && ex.sim_status() === 0,
         litBefore + " -> " + nonBlack(snap()) + " lit px · status=" + ex.sim_status());
 
-  // A reboot re-reads the store: the newest slot still wins.
+  // A reboot re-reads the store: the committed cart is still the one that runs.
   ex.sim_init();
   for (let i = 0; i < 8; i++) ex.sim_frame();
   check("a POWER-ON keeps running the uploaded cart",
-        ex.sim_cart_active() === 1 && nonBlack(snap()) > 50000 && ex.sim_status() === 0,
+        ex.sim_cart_active() === 0 && nonBlack(snap()) > 50000 && ex.sim_status() === 0,
         "slot=" + ex.sim_cart_active() + " lit=" + nonBlack(snap()) + " status=" + ex.sim_status());
 
-  // ERASE the running slot: only the older slot (the real .p8.png) is left, so it is newest again.
-  feed(frame(0x05, [1]));
-  check("ERASE clears the running slot", ex.sim_cart_active() === -1, "active=" + ex.sim_cart_active());
+  // ERASE the slot: nothing is stored, so the embedded default cart is the ladder's floor and it
+  // must run - the panel may not be left on the boot screen.
+  feed(frame(0x05, [0]));
+  check("ERASE clears the cart", ex.sim_cart_active() === -1, "active=" + ex.sim_cart_active());
   ex.sim_init();
-  check("after ERASE the store still holds the .p8.png cart", ex.sim_cart_active() === 0,
-        "slot=" + ex.sim_cart_active());
+  for (let i = 0; i < 8; i++) ex.sim_frame();
+  check("after ERASE the embedded cart runs",
+        ex.sim_cart_active() === -1 && ex.sim_cart_running() === -1 && nonBlack(snap()) > 0,
+        "slot=" + ex.sim_cart_active() + " running=" + ex.sim_cart_running() +
+        " lit=" + nonBlack(snap()));
 
   // Every served .p8.png, one after another: each has to commit and RUN. These are real carts, so
   // this exercises the PXA code-section branch on five different payloads (and the engine loading
@@ -272,7 +291,7 @@ if (fixtures.length) {
     };
     probe.sim_init();                                 // POWER-ON
     if (payload) {                                    // ...then the device's own protocol, if asked
-      const slot = probe.sim_cart_active() === 1 ? 0 : 1;   // the slot that is NOT running
+      const slot = 0;                                  // one cart at a time: a single slot
       pfeed(frame(0x01, [slot, ...le7(payload.length, 3), nm(name).length, ...nm(name)]));
       for (let off = 0; off < payload.length; off += 128) {
         const c = payload.subarray(off, off + 128);
@@ -280,8 +299,16 @@ if (fixtures.length) {
       }
       pfeed(frame(0x03, le7(crc16(payload), 3)));
     }
-    for (let i = 0; i < frames; i++) probe.sim_frame();
-    return { peak: Number(probe.sim_heap_peak()), used: Number(probe.sim_heap_used()),
+    let peak1 = 0;
+    for (let i = 0; i < frames; i++) {
+      probe.sim_frame();
+      if (i === 0) peak1 = Number(probe.sim_heap_peak());   // the load moment, before the cart runs
+    }
+    const fb = new Uint16Array(probe.memory.buffer, probe.sim_fb(), 240 * 240);
+    let lit = 0;
+    for (const v of fb) if (v) lit++;
+    return { peak: Number(probe.sim_heap_peak()), peak1, lit,
+             used: Number(probe.sim_heap_used()),
              refused: Number(probe.sim_heap_refused()), deviceAlloc: Number(probe.sim_device_alloc()) === 1,
              status: probe.sim_status(), slot: probe.sim_cart_active(),
              running: Number(probe.sim_cart_running()) };
@@ -306,7 +333,7 @@ if (fixtures.length) {
   for (const name of fixtures) {
     const payload = await cartPayload(new Uint8Array(fs.readFileSync(path.join(cartDir, name))));
     ex.sim_init();                                    // POWER-ON: the engine re-reads the store
-    const slot = ex.sim_cart_active() === 1 ? 0 : 1;  // never the slot that is already running
+    const slot = 0;                                    // one cart at a time: a single slot
     upload(slot, nm(name), payload);
     feed(frame(0x03, le7(crc16(payload), 3)));
     for (let i = 0; i < 30; i++) ex.sim_frame();
@@ -339,6 +366,33 @@ if (fixtures.length) {
           (servedToEnd || (m.refused > 0 && m.running !== -2)),
           fit(m.peak, m.refused) + " (settled " + Math.round(m.used / 1024) + " KB, running " +
           cartOf(m.running) + ")");
+  }
+
+  // A cart the PAGE compiled (src/picovave_cart.h "PVB1"): the same cartridge ROM, plus Lua
+  // bytecode instead of the source. The device hands the chunk straight to luaL_loadbufferx("b"),
+  // so it never expands the source and never runs the compiler - the two costs that decide whether
+  // a big cart loads at all. What must hold: the same pixels, from the same cart, with a smaller
+  // load peak (the compile is what the upload replaced).
+  const bcName = fixtures.find((n) => n.startsWith("baba")) || fixtures[0];
+  if (bcName) {
+    const cooked = (await cartPayload(new Uint8Array(fs.readFileSync(path.join(cartDir, bcName))))).subarray(4);
+    const bc = await compileCart(cooked);
+    if (bc && bc.length <= 44216) {
+      const pv = new Uint8Array(4 + 17152 + 4 + bc.length);
+      pv.set([0x50, 0x56, 0x42, 0x31], 0);                 // "PVB1"
+      pv.set(cooked.subarray(0, 17152), 4);                // the ROM, verbatim
+      new DataView(pv.buffer).setUint32(4 + 17152, bc.length, true);
+      pv.set(bc, 4 + 17152 + 4);
+      const srcRun = await probeCart(bcName, (await cartPayload(
+        new Uint8Array(fs.readFileSync(path.join(cartDir, bcName))))), 300);
+      const bcRun = await probeCart(bcName, pv, 300);
+      check("a page-compiled cart (PVB1) runs the same cart from bytecode",
+            bcRun.status === 0 && bcRun.running === bcRun.slot && bcRun.lit === srcRun.lit &&
+            bcRun.peak1 <= srcRun.peak1,
+            bc.length + " B bytecode, " + pv.length + " B payload · load peak " +
+            Math.round(srcRun.peak1 / 1024) + " -> " + Math.round(bcRun.peak1 / 1024) + " KB · lit " +
+            bcRun.lit + " · refused " + bcRun.refused);
+    }
   }
 
   // ...and a real one the device CAN run must fit, measured rather than assumed. flipside is the

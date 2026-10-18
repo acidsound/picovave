@@ -26,7 +26,7 @@
  * size is 0x01C74000 (. _guard0) minus wherever .bss ends. tools/verify_final.py reads the same
  * number back out of build/picovave/picovave.map and fails if this constant has drifted from it
  * (and from the page's, sim_test.mjs's and host/alloc_test.c's copies). */
-#define PV_ARENA 414184u                  /* app.ld: [_pool_start,_pool_top), 0x01C0EE18..0x01C74000 */
+#define PV_ARENA 414936u                  /* app.ld: [_pool_start,_pool_top), 0x01C0EB28..0x01C74000 */
 
 /* ...but this is a SIMULATOR, so the arena can be any size a harness asks for: PV_ARENA_MAX is
  * just the array, and sim_arena_set() picks how much of it alloc.c may use - which answers "how

@@ -55,28 +55,49 @@
  * plain firmware update never touches, so an uploaded cart survives reflashing. The simulator
  * keeps the same layout in a RAM array, so both run this code over the same offsets.
  *
- * The region is 120 KiB and the flash's erase unit is 4 KiB, so two slots sit on sector
- * boundaries with nothing else in the region:
- *   slot 0  0x0000..0xF000   (61,440 B = 15 sectors)
- *   slot 1  0xF000..0x1E000  (61,440 B = 15 sectors)
- * A slot is a 64-byte header then the payload: a 4-byte magic and the 32,800-byte cooked cart.
- * BEGIN erases the whole slot before writing, so each slot is written whole. Uploading writes
- * the slot that is NOT running: an interrupted upload can never disturb the cart that is
- * playing. Which slot runs is the one with the newest `seq` (a counter in the header), so the
- * committed slot wins on the next boot, and the older slot is the rollback - pv_run_next()
- * below, which the app drives: the newest valid slot first, then the slot it replaced, then the
- * embedded default cart. That ladder matters because the newest cart is not always one the device
- * can RUN (its Lua costs 10-20x its source, and the pool is 288 KiB), and a slot the engine
- * refuses must not leave the panel dark until the next USB upload. */
+ * ONE cart at a time: the region is 120 KiB and it holds a single slot, so a cart may use the
+ * whole store. That is what a precompiled cart needs - the bytecode plus the 17,152-byte ROM is
+ * 50-110 KB, where the cooked form is 32,800 B (two 61,440-byte slots could not hold it). The
+ * trade is the rollback slot: an upload now erases the cart that is playing, so a power cut in
+ * the middle of one leaves the store empty. The boot ladder still ends on the embedded default
+ * cart, so the panel never goes dark - the floor moved from "the cart it replaced" to "the cart
+ * the firmware ships with".
+ *
+ * The region is 120 KiB and the flash's erase unit is 4 KiB:
+ *   slot 0  0x0000..0x1E000  (122,880 B = 30 sectors)
+ * A slot is a 64-byte header then the payload: a 4-byte magic and either the 32,800-byte cooked
+ * cart or the precompiled form below. BEGIN erases the whole slot before writing, so it is
+ * written whole. pv_run_next() below is what the app drives when the engine refuses the cart:
+ * the slot first, then the embedded default cart. That ladder matters because a cart is not
+ * always one the device can RUN (its Lua costs 10-20x its source), and a refused cart must not
+ * leave the panel dark until the next USB upload. */
 #define PV_STORE_SIZE   (120u * 1024u)                 /* 0x9D000..0xBB000 */
-#define PV_SLOT_COUNT   2u
+#define PV_SLOT_COUNT   1u                             /* one cart at a time: see above */
 #define PV_SLOT_SIZE    (PV_STORE_SIZE / PV_SLOT_COUNT)
 #define PV_SLOT_BASE(s) ((uint32_t)(s) * PV_SLOT_SIZE)
 #define PV_SLOT_DATA    64u                            /* payload offset inside a slot */
 #define PV_COOKED_SIZE  32800u                         /* 160*205: the cooked cart a .p8.png carries */
 #define PV_COOKED_MAGIC "PVC1"                         /* the payload's first four bytes */
 #define PV_COOKED_MAGIC_LEN 4u
-#define PV_CART_LEN     (PV_COOKED_MAGIC_LEN + PV_COOKED_SIZE)   /* 32,804: the only cart length */
+#define PV_CART_LEN     (PV_COOKED_MAGIC_LEN + PV_COOKED_SIZE)   /* 32,804: a cooked cart payload */
+
+/* ---- precompiled carts ------------------------------------------------------
+ * The page can compile a cart's Lua and upload the bytecode instead of the source, so the device
+ * never runs the compiler and never materialises the source buffer (p8_emu.c's
+ * p8_load_bytecode()). The payload is:
+ *   [0,4)                 "PVB1"
+ *   [4, 4+17152)          the cartridge ROM, verbatim - the same 17,152 bytes a cooked cart starts
+ *                         with, because gfx/map/sfx live there and the engine reads them in place
+ *   [4+17152, +4)         u32 bc_len, little-endian: the bytecode length that follows
+ *   [.., len)             the bytecode (Lua's own dump, produced by the same Lua the device runs)
+ * A slot holds PV_SLOT_SIZE - PV_SLOT_DATA = 61,376 payload bytes, so bc_len <= 44,216. The page
+ * uploads the cooked cart instead when a cart's bytecode does not fit (nothing regresses: that is
+ * the path every cart takes today). */
+#define PV_ROM_SIZE     17152u                         /* = femto8's CART_MEMORY_SIZE (0x4300) */
+#define PV_BCODE_MAGIC  "PVB1"
+#define PV_BC_HDR       (PV_COOKED_MAGIC_LEN + PV_ROM_SIZE + 4u)   /* 17,160: magic + ROM + bc_len */
+#define PV_SLOT_PAYLOAD (PV_SLOT_SIZE - PV_SLOT_DATA)             /* 61,376 */
+#define PV_BC_MAX       (PV_SLOT_PAYLOAD - PV_BC_HDR)             /* 44,216 */
 #define PV_DATA_MAX     512u                           /* payload bytes one DATA frame may carry */
 #define PV_SECTOR       4096u                          /* the flash erase unit; slots sit on these */
 #define PV_NAME_MAX     31u
@@ -105,6 +126,8 @@ typedef struct {
 typedef struct {
     int      active;          /* slot index, or -1 -> the embedded default */
     uint32_t active_len;
+    uint8_t  slot_kind[PV_SLOT_COUNT];   /* 0 cooked cart, 1 precompiled bytecode */
+    uint32_t slot_len[PV_SLOT_COUNT];    /* payload length as stored */
     int      up;              /* an upload is in progress */
     uint8_t  up_slot;
     uint32_t up_len, up_off;
@@ -183,24 +206,43 @@ static void pv_err(uint8_t code) { uint8_t b[1] = { code }; pv_send(0x11, b, 1);
 
 /* A slot header is only a cart if the length and the payload's magic say so: a slot written by
  * an older format (or anything else) is skipped, so it can never be run as a cart. */
-static int pv_hdr_read(uint8_t slot, pv_slot_hdr_t *h)
+static int pv_payload_kind(uint8_t slot, uint32_t len)
 {
     uint8_t m[PV_COOKED_MAGIC_LEN];
+    /* A bytecode payload can be SMALLER than a cooked cart (flipside: 27,157 B), so the lower
+     * bound is the bytecode header, not PV_CART_LEN; the magic below decides which it is. */
+    if (len <= PV_BC_HDR || len > PV_SLOT_PAYLOAD)
+        return -1;
+    if (hh_store_read(PV_SLOT_BASE(slot) + PV_SLOT_DATA, m, sizeof m) != 0)
+        return -1;
+    if (memcmp(m, PV_COOKED_MAGIC, sizeof m) == 0)
+        return len == PV_CART_LEN ? 0 : -1;               /* 0 = cooked cart */
+    if (memcmp(m, PV_BCODE_MAGIC, sizeof m) == 0) {       /* 1 = precompiled bytecode */
+        uint8_t b[4];
+        uint32_t bc;
+        if (len <= PV_BC_HDR)
+            return -1;
+        if (hh_store_read(PV_SLOT_BASE(slot) + PV_SLOT_DATA + PV_BC_HDR - 4u, b, 4) != 0)
+            return -1;
+        bc = (uint32_t)b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+        if (bc == 0 || bc > PV_BC_MAX || bc != len - PV_BC_HDR)
+            return -1;
+        return 1;
+    }
+    return -1;
+}
+
+static int pv_hdr_read(uint8_t slot, pv_slot_hdr_t *h)
+{
     if (slot >= PV_SLOT_COUNT)
         return -1;
     if (hh_store_read(PV_SLOT_BASE(slot), h, sizeof *h) != 0)
         return -1;
     if (h->magic != PV_SLOT_MAGIC)
         return -1;
-    if (h->len != PV_CART_LEN)
-        return -1;
     if (h->name_len > PV_NAME_MAX || h->name[h->name_len] != 0)
         return -1;
-    if (hh_store_read(PV_SLOT_BASE(slot) + PV_SLOT_DATA, m, sizeof m) != 0)
-        return -1;
-    if (memcmp(m, PV_COOKED_MAGIC, sizeof m) != 0)
-        return -1;
-    return 0;
+    return pv_payload_kind(slot, h->len) < 0 ? -1 : 0;
 }
 
 static uint32_t pv_seq_newest(void)
@@ -225,10 +267,14 @@ static void pv_cart_init(void)
     memset(&pv_cart, 0, sizeof pv_cart);
     pv_cart.active = -1;
     for (slot = 0; slot < PV_SLOT_COUNT; slot++)
-        if (pv_hdr_read(slot, &h) == 0 && (pv_cart.active < 0 || h.seq > best)) {
-            best = h.seq;
-            pv_cart.active = slot;
-            pv_cart.active_len = h.len;
+        if (pv_hdr_read(slot, &h) == 0) {
+            pv_cart.slot_kind[slot] = (uint8_t)pv_payload_kind(slot, h.len);
+            pv_cart.slot_len[slot] = h.len;
+            if (pv_cart.active < 0 || h.seq > best) {
+                best = h.seq;
+                pv_cart.active = slot;
+                pv_cart.active_len = h.len;
+            }
         }
     pv_run_reset();
 }
@@ -249,15 +295,19 @@ static void pv_run_reset(void) { pv_run_slot = (int8_t)pv_cart.active; }
  * cart, then nothing. Returns 1 when the cart hh_cart_data()/hh_cart_size() name changed. */
 static int pv_run_next(void)
 {
+#if PV_SLOT_COUNT > 1
     pv_slot_hdr_t h;
+#endif
     if (pv_run_slot == PV_RUN_END)
         return 0;
     if (pv_run_slot >= 0) {
+#if PV_SLOT_COUNT > 1
         uint8_t other = (uint8_t)((pv_run_slot + 1) % (int)PV_SLOT_COUNT);
         if ((int)pv_run_slot == pv_cart.active && pv_hdr_read(other, &h) == 0) {
             pv_run_slot = (int8_t)other;           /* the cart the newest replaced */
             return 1;
         }
+#endif
         pv_run_slot = -1;                          /* the embedded default cart */
         return 1;
     }
@@ -278,8 +328,8 @@ static void pv_begin(const uint8_t *a, uint32_t an)
     nl = a[4];
     if (nl > PV_NAME_MAX || an < 5u + nl)
         return pv_err(PV_E_RANGE);
-    if (len != PV_CART_LEN)               /* a cooked cart, or nothing: BEGIN says which it is */
-        return pv_err(PV_E_FMT);
+    if (len != PV_CART_LEN && !(len > PV_BC_HDR && len <= PV_SLOT_PAYLOAD))
+        return pv_err(PV_E_FMT);          /* a cooked cart, a bytecode payload, or nothing */
     if (hh_store_erase(PV_SLOT_BASE(slot), PV_SLOT_SIZE) != 0)
         return pv_err(PV_E_SLOT);
     pv_cart.up = 1;
@@ -321,6 +371,7 @@ static void pv_data(const uint8_t *a, uint32_t an)
 static void pv_end(const uint8_t *a, uint32_t an)
 {
     pv_slot_hdr_t h;
+    int kind;
     if (!pv_cart.up)
         return pv_err(PV_E_NOBEGIN);
     if (an < 3)                                   /* a 16-bit CRC needs three 7-bit bytes */
@@ -330,6 +381,14 @@ static void pv_end(const uint8_t *a, uint32_t an)
     if ((uint16_t)pv_get7(a, 3) != pv_cart.up_crc) {
         pv_cart.up = 0;                       /* the payload is unmarked: a corrupt upload never runs */
         return pv_err(PV_E_CRC);
+    }
+    /* The CRC says the bytes are the ones the host sent; this says they are a cart at all. A
+     * payload whose magic and length disagree is refused here, so a slot can never hold something
+     * the loader would then misread. */
+    kind = pv_payload_kind(pv_cart.up_slot, pv_cart.up_len);
+    if (kind < 0) {
+        pv_cart.up = 0;
+        return pv_err(PV_E_FMT);
     }
     memset(&h, 0, sizeof h);
     h.magic = PV_SLOT_MAGIC;
@@ -342,6 +401,8 @@ static void pv_end(const uint8_t *a, uint32_t an)
         pv_cart.up = 0;
         return pv_err(PV_E_SLOT);
     }
+    pv_cart.slot_kind[pv_cart.up_slot] = (uint8_t)kind;
+    pv_cart.slot_len[pv_cart.up_slot] = h.len;
     pv_cart.active = pv_cart.up_slot;
     pv_cart.active_len = h.len;
     pv_cart.up = 0;
@@ -359,6 +420,8 @@ static void pv_erase(const uint8_t *a, uint32_t an)
     if (slot >= PV_SLOT_COUNT)
         return pv_err(PV_E_SLOT);
     hh_store_erase(PV_SLOT_BASE(slot), PV_SLOT_SIZE);
+    pv_cart.slot_kind[slot] = 0;
+    pv_cart.slot_len[slot] = 0;
     if (pv_cart.active == (int)slot) {
         pv_cart.active = -1;
         pv_cart.active_len = 0;

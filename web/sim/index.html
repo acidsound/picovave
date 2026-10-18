@@ -250,6 +250,7 @@ import { parse as parseFwsc } from "./fwsc.mjs";
 import { WebMidiBackend, Updater, pairOutput, loadPackage, webMidiSupported, InstallError } from "./fm1ota.mjs";
 // The one cart format: a .p8.png, unwrapped here (the device never decodes an image).
 import { cartPayload } from "./p8png.mjs";
+import { compileCart } from "./luabc.mjs";
 
 const $ = (id) => document.getElementById(id);
 const AUDIO = typeof AudioContext === "function";
@@ -960,7 +961,12 @@ function replyText(m) {
 }
 
 let cartRaw = null, cartName = "";
-let cartSlot = 0;   // uploads alternate slots, so an interrupted upload never touches the running cart
+let cartWire = null;          // what goes on the wire: a PVB1 bytecode payload, or cartRaw
+let cartCompile = "";        // the note the cart line shows about the compile
+// ONE cart at a time: the store holds a single slot (src/picovave_cart.h), so an upload replaces
+// the cart that is playing. A power cut mid-upload leaves the store empty and the embedded default
+// cart boots - the ladder's floor, not the cart it replaced.
+const CART_SLOT = 0;
 
 /* Where the cart controls point - the SAME split the DEVICE box makes for packages:
  *   SIMULATOR   the store inside the wasm (the silent runner, or the AudioWorklet): the browser
@@ -991,7 +997,7 @@ function renderCartTarget() {
  * instance is handed the whole arena array (DEVICE_ARENA_MAX, below) so a cart that is far too big
  * for the hardware is still perfectly good on the simulator. This is the "before upload" warning;
  * the upload itself is unchanged. */
-const DEVICE_HEAP = 414184 - 1024;
+const DEVICE_HEAP = 414936 - 1024;
 /* The running page simulator's pool: sim/device_alloc.c's PV_ARENA_MAX, i.e. the whole array. Only
  * the THROWAWAY measurement instance keeps the default PV_ARENA - the device's own arena - because
  * that instance is the device verdict. */
@@ -1017,7 +1023,7 @@ async function measureCart(d) {
     ex = await instantiateModule(mod);
     if (typeof ex.sim_init !== "function" || typeof ex.sim_heap_peak !== "function") return null;
     ex.sim_init();                                         // boots the built-in cart, like a device
-    for (const m of cartFrames(1, "measure.p8.png", d)) {  // the device's own protocol, its own slot
+    for (const m of cartFrames(CART_SLOT, "measure.p8.png", d)) {  // the device's own protocol, its own slot
       new Uint8Array(ex.memory.buffer, ex.sim_sysex_in(), m.length).set(m);
       ex.sim_sysex(m.length);
     }
@@ -1099,9 +1105,18 @@ async function loadCart(file) {
   }
   cartName = name;
   cartFit = null;
-  $("cartsay").textContent = `${cartName} · 160x205 해독 · ${cartRaw.length} B (쿠킹 32,800) · 기기 적합성 측정 중…`;
-  cartFit = await measureCart(cartRaw);
-  $("cartsay").textContent = `${cartName} · 160x205 해독 · ${cartRaw.length} B (쿠킹 32,800)${fitText()}`;
+  cartWire = null;
+  cartCompile = "";
+  try {
+    const bc = await compileCart(cartRaw.subarray(4));
+    if (bc) {
+      if (bc.length <= BC_MAX) { cartWire = bytecodePayload(cartRaw, bc); cartCompile = ` · 바이트코드 ${bc.length} B`; }
+      else cartCompile = ` · 바이트코드 ${bc.length} B > 슬롯 ${BC_MAX} B → 소스로 업로드`;
+    }
+  } catch (e) { cartCompile = ""; }
+  $("cartsay").textContent = `${cartName} · 160x205 해독 · ${cartRaw.length} B (쿠킹 32,800)${cartCompile} · 기기 적합성 측정 중…`;
+  cartFit = await measureCart(cartWire || cartRaw);   // measure what will actually be uploaded
+  $("cartsay").textContent = `${cartName} · 160x205 해독 · ${cartRaw.length} B (쿠킹 32,800)${cartCompile}${fitText()}`;
   if (cartFit && cartFit.refused > 0)
     // A cart the pool served only by refusing still runs, but a refusal IS a hitch (Lua collects and
     // retries): amber, and the line says how often. cartTight() is the harder gate the upload asks.
@@ -1120,16 +1135,28 @@ async function loadCart(file) {
  * nothing but a 160x205 image becomes a payload - so there is only one format to get wrong. */
 function cartToSend() {
   if (!cartRaw) { fail("카트 .p8.png 를 먼저 고르거나 끌어다 놓으세요"); return null; }
-  return cartRaw;
+  return cartWire || cartRaw;
 }
+
+/* "PVB1": the cartridge ROM plus the bytecode the page compiled. The device hands the chunk
+ * straight to luaL_loadbufferx("b"), so it never expands the source and never runs the compiler -
+ * the two costs that decide whether a big cart loads at all. Layout: src/picovave_cart.h. */
+function bytecodePayload(cooked, bc) {
+  const out = new Uint8Array(4 + 17152 + 4 + bc.length);
+  out.set([0x50, 0x56, 0x42, 0x31], 0);            // "PVB1"
+  out.set(cooked.subarray(4, 4 + 17152), 4);       // the ROM, verbatim
+  new DataView(out.buffer).setUint32(4 + 17152, bc.length, true);
+  out.set(bc, 4 + 17152 + 4);
+  return out;
+}
+const BC_MAX = 105656;                             // 122,816 payload - 17,160 header (one slot)
 
 /* SIMULATOR: hand the frames to the wasm's own parser. A committing frame reboots it (the app
  * re-loads the slot; there is no chip reset). */
 function uploadCartSim(d) {
   const r = runner();
   if (r.kind === "wl" && !wl.node) return fail("실행 중인 기기가 없다");
-  const slot = cartSlot;                 // write the slot that is NOT running: a failed upload cannot disturb it
-  cartSlot ^= 1;
+  const slot = CART_SLOT;
   const msgs = cartFrames(slot, cartName, d);
   const log = [`SIMULATOR 카트 · ${cartName} · ${d.length} B · 슬롯 ${slot} · ` +
                `${msgs.length} 프레임 (BEGIN + DATA×${msgs.length - 2} + END)`];
@@ -1211,8 +1238,7 @@ async function uploadCartUsb(d) {
                `${fitText().slice(3)}\n\n` +
                `그래도 실기에 올릴까? 기기는 기본/이전 카트로 폴백하므로 멈추지는 않는다.`))
     { fail("FLASH(USB) 카트 업로드 취소 — 기기가 감당하지 못한 카트"); return; }
-  const slot = cartSlot;
-  cartSlot ^= 1;
+  const slot = CART_SLOT;
   const msgs = cartFrames(slot, cartName, d);
   const log = [`FLASH(USB) 카트 · ${cartName} · ${d.length} B · 슬롯 ${slot} · ` +
                `${msgs.length} 프레임 (BEGIN + DATA×${msgs.length - 2} + END)`];
@@ -1241,17 +1267,17 @@ function uploadCart() {
   return cartTarget === "usb" ? uploadCartUsb(d) : uploadCartSim(d);
 }
 
-/* Erase both slots (back to the embedded default cart). FLASH(USB) sends the device's own ERASE
- * frames, so the same command clears the SLOOP store there. */
+/* Erase the one slot (back to the embedded default cart). FLASH(USB) sends the device's own ERASE
+ * frame, so the same command clears the SLOOP store there. */
 async function eraseCartUsb() {
   if (cartUsb) return fail("FLASH(USB) 가 이미 진행 중이다");
   if (!webMidiSupported()) { fail("이 브라우저에는 Web MIDI 가 없다 — Chrome 을 https / localhost 로 열 것"); return; }
-  const log = ["FLASH(USB) 슬롯 비우기 · ERASE 0, ERASE 1"];
+  const log = ["FLASH(USB) 슬롯 비우기 · ERASE 0"];
   const say = (s) => { log.push(s); showLog(log); };
   cartUsb = true;
   try {
     const { dev } = await cartUsbLink(say);
-    const last = await cartUsbSend(dev, [cartFrame(0x05, [0]), cartFrame(0x05, [1])], say);
+    const last = await cartUsbSend(dev, [cartFrame(0x05, [0])], say);
     dev.link.close();
     $("cartsay").textContent = "슬롯 비움 → 기본 카트 (실기)";
     ok(`FLASH(USB) 슬롯 비우기 → 기본 카트 (${replyText({ reply: last })})`);
@@ -1265,8 +1291,7 @@ async function eraseCartUsb() {
 
 function eraseCart() {
   if (cartTarget === "usb") return eraseCartUsb();
-  let res = null;                              // both slots: back to the embedded default cart
-  for (const s of [0, 1]) { const r = runner().sysex(cartFrame(0x05, [s])); if (r) res = r; }
+  const res = runner().sysex(cartFrame(0x05, [0]));   // the one slot: back to the embedded cart
   $("cartsay").textContent = "슬롯 비움 → 기본 카트 (웹)";
   ok("SIMULATOR 슬롯 비우기 → 기본 카트 (" + replyText(res) + ")");
 }

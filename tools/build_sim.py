@@ -289,8 +289,19 @@ def main():
     wasm = compile_wasm(engine, a.out / "sim.wasm", flags, alloc)
     print("wasm     %s  %d B" % (wasm, wasm.stat().st_size))
 
-    for name in ("index.html", "picovave_render.js", "fwsc.mjs", "fm1ota.mjs", "p8png.mjs"):
+    for name in ("index.html", "picovave_render.js", "fwsc.mjs", "fm1ota.mjs", "p8png.mjs",
+                 "luabc.mjs"):
         shutil.copy(WEB / name, a.out / name)
+
+    # The page's cart compiler: the DEVICE's Lua built for wasm32 (tools/build_luabc.py), so the
+    # bytecode an upload carries is the chunk the device would have made itself. Stamped, so this
+    # is a no-op until the vendored Lua changes.
+    r = subprocess.run([sys.executable, str(SRC / "tools" / "build_luabc.py"), "--out", str(a.out)],
+                       cwd=SRC, capture_output=True, text=True)
+    sys.stdout.write(r.stdout)
+    if r.returncode:
+        sys.stderr.write(r.stderr)
+        raise SystemExit("build_sim: build_luabc failed")
     # picovave's own AudioWorklet, served verbatim: its audio clock drives the device and makes
     # its sound. picovave's, not a copy of another project's engine.
     shutil.copy(SIM / "worklet.js", a.out / "worklet.js")

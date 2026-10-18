@@ -96,6 +96,7 @@ static void hh_input_read(hin_t *in)
  * one tools/build_sim.py bakes into the wasm, and the same one a blank device carries. */
 static const uint8_t *hh_cart_data(void) { return cart_default; }
 static uint32_t hh_cart_size(void) { return (uint32_t)cart_default_len; }
+static int hh_cart_kind(void) { return 0; }        /* the preview runs the baked cooked cart */
 static int hh_cart_next(void) { return 0; }        /* one cart here: there is no next candidate */
 static void hh_boot_stage(int stage) { (void)stage; }  /* no panel in a host preview */
 

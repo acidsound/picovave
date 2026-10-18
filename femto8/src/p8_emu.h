@@ -284,7 +284,7 @@ extern char *m_font;
 extern char m_current_cart_dir[PV_CART_PATH_MAX];
 extern char m_current_cart_file_name[PV_CART_PATH_MAX];
 extern char m_breadcrumb[256];
-extern char m_clipboard[1024];
+extern char m_clipboard[256];
 extern char m_param_string[256];
 
 extern bool m_load_available;
@@ -312,6 +312,8 @@ int p8_load_ram(uint8_t *buffer, int size);
  * script). This is the only cart path picovave has - the page unwraps the image, so no PNG
  * decoder (and no 131 KB RGBA surface) exists on this side. */
 int p8_load_cooked(const uint8_t *cooked, uint32_t size);
+/* picovave: a cart whose Lua the page already compiled (src/picovave_cart.h "PVB1"). */
+int p8_load_bytecode(const uint8_t *payload, uint32_t size);
 /* picovave: frame-driven entry (device + wasm superloops). p8_begin() sets the
  * cart up, p8_step() runs one frame; the harness owns setjmp(jmpbuf_restart). */
 extern jmp_buf jmpbuf_restart;

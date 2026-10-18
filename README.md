@@ -69,9 +69,11 @@ M-Vave SMK-37 Pro(AC791N)용 커스텀 펌웨어 패키지 형식을 역설계�
 
 ## 카트(게임) 업로드와 실행
 
-기기는 SLOOP 스토어(플래시 0x9D000..0xBB000, 120 KiB)에 카트를 **두 슬롯**(각 61,440 B)으로
-보관한다. 슬롯 헤더(64 B)에는 매직·이름·길이·`seq`·CRC16/CCITT가 있고, **부팅 시 유효한 슬롯 중
-`seq`가 가장 큰 것**을 실행한다 — 그래서 업로드가 곧 실행이고, 이전 슬롯은 롤백 대상으로 남는다.
+기기는 SLOOP 스토어(플래시 0x9D000..0xBB000, 120 KiB)를 **한 카트**에 쓴다(슬롯 1개, 122,880 B).
+슬롯 헤더(64 B)에는 매직·이름·길이·`seq`·CRC16/CCITT가 있고, 부팅 시 그 슬롯을 실행한다 — 업로드가
+곧 실행이다. 한 슬롯인 이유는 **사전 컴파일 카트**(`PVB1`: ROM + Lua 바이트코드, 최대 105,656 B)가
+61,440 B 슬롯에는 들어가지 않기 때문이다. 대가로 롤백 슬롯은 없고, 업로드 도중 전원이 끊기면
+래더의 바닥인 **내장 카트**가 뜬다(패널은 검게 남지 않는다).
 업로드는 USB SysEx `F0 22 24 35 7E <cmd> .. F7`(`01 BEGIN` / `02 DATA` / `03 END` / `05 ERASE` /
 `06 LIST`)이다.
 
@@ -194,7 +196,7 @@ PSRAM 인터페이스가 없어 이 상한은 하드웨어 제약이다.
     python3 tools/build_sim.py --probe-alloc                   # 힙을 비용 모델(sim/heap_probe.c)로 — arena 없는 보수적 추정치
     python3 -m http.server -d build/sim 8738                   # → http://localhost:8738
 
-    # 3. 검증 (앱/패키지 + 화면·입력 픽셀 일치(호스트 프리뷰 ↔ wasm) + 시뮬레이터 페이지 + 실기 플래셔 교차검증, 204개 검사)
+    # 3. 검증 (앱/패키지 + 화면·입력 픽셀 일치(호스트 프리뷰 ↔ wasm) + 시뮬레이터 페이지 + 실기 플래셔 교차검증, 209개 검사)
     AC79_SDK=~/fw-AC79_AIoT_SDK python3 tools/verify_final.py
 
 준비물: JieLi pi32v2 툴체인(`~/.jieli/toolchain`), JieLi AC79 SDK, Pillow, Node.
@@ -207,7 +209,7 @@ macOS에서는 JieLi 툴체인 명령도 linux/amd64 Docker 컨테이너에서 �
 |---|---|
 | [picovave/src/picovave_input.h](picovave/src/picovave_input.h) | 입력 모델 (hin_t: 버튼/건반/엔코더/패드/페이더/휠) — 세 소비자가 공유 |
 | [picovave/src/picovave_p8.h](picovave/src/picovave_p8.h) | 앱 계층: femto8 부팅·프레임 루프(`p8_begin`/`p8_step`)·프레임별 setjmp·입력→gamepad — 세 소비자가 공유 |
-| [picovave/src/picovave_cart.h](picovave/src/picovave_cart.h) | 카트 저장소(두 슬롯·CRC16·`seq`) + SysEx 업로드 프로토콜 — 기기/시뮬레이터가 공유 |
+| [picovave/src/picovave_cart.h](picovave/src/picovave_cart.h) | 카트 저장소(한 슬롯·CRC16·`seq`) + SysEx 업로드 프로토콜 — 기기/시뮬레이터가 공유 |
 | [picovave/src/picovave_gfx.h](picovave/src/picovave_gfx.h) | **128x128**(PICO-8 자체 크기) RGB565 캔버스 — 엔진이 카트를 그리는 그 표면이고, 기기의 OTA/복구/크래시 화면이 `hg_fb` 별칭으로 재사용한다(패널 확대는 표시 경로가 한 줄씩). 엔진은 `-DLUAI_MAXCCALLS=48`로 컴파일된다(스톡 200은 보호 레벨당 316 B × 200 ≈ 63 KB로 24,320 B 스택을 넘겨, 깊은 카트에서 Lua의 자체 가드보다 하드웨어 폴트가 먼저 온다) | 빌드는 identity 응답의 NUL 패딩에 **자기 태그**(빌드 입력의 sha256 앞 8자리)를 실어 보내고, `ota_probe.py --ask`/`--flash`가 그것을 찍는다(패널은 마지막 프레임을 들고 있으므로 플래싱 여부의 근거가 못 된다) | `hg_crash_screen()`은 `PICOVAVE CRASH` 헤드라인 아래 12줄에 PC·벡터·EMU/DBG·SP 판정·USP/SSP·**스택 최대 사용량**·크래시 횟수·ETM을 그린다. 기록은 `.noinit`에 남아 **다음 부팅이 같은 화면을 `LAST CRASH` 헤드라인으로 10초** 다시 그린다(놓칠 일 없음) |
 | [picovave/femto8/](picovave/femto8/) | vendored PICO-8(femto8) 엔진 — **10개의 문서화된 패치**만 적용([femto8/README.picovave.md](femto8/README.picovave.md)) |
 | [picovave/src/picovave.c](picovave/src/picovave.c) | 기기 진입점 + hh_* HAL + 패널 푸시(RGB565 BE 스왑) + ALNK0/TIMER5 ISR + USB/OTA/카트 글루 |
