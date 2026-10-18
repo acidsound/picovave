@@ -7,9 +7,9 @@
  * ROM if all three run the same code. Here the allocator is the host's malloc and the
  * clock is a counter this file owns, so a preview run is fast and deterministic.
  *
- * gdi_display_update_async is deliberately NOT here: preview.c defines it, because that
- * is where the panel push and the capture live. src/picovave.c does the same on the
- * device, and both swap the framebuffer in place the same way.
+ * gdi_display_update_async is here, as in seam_sim.c: it expands the engine's 128x128 screen
+ * into a 240x240 buffer (gdi.h), which is what the preview captures, so the capture is the
+ * panel's picture by construction rather than by a second implementation.
  *
  * It is a separate translation unit on purpose: it must NOT see p8_emu.h, which maps
  * malloc onto rh_malloc - the allocator has to call the real malloc. */
@@ -27,10 +27,13 @@ uint32_t gamepad;                        /* p8_input.c reads this when !SDL */
 /* p8_emu.c's help()/version dialog prints this; the device defines it in its syscalls. */
 const char *femto8_version = "femto8 (picovave preview)";
 
-/* femto8 renders 240x240 native RGB565 straight into this. preview.c reads it. */
-uint16_t p8_panel_fb[240 * 240];
+/* The engine's 128x128 screen, and the 240x240 the preview captures (both native RGB565). */
+uint16_t p8_screen_fb[GDI_W * GDI_H];
+uint16_t p8_panel_fb[GDI_OUT_W * GDI_OUT_H];
 uint32_t p8_panel_draws;
 uint32_t p8_panel_bytes;
+static uint8_t p8_sx[GDI_OUT_W];
+static int p8_sx_ready;
 
 void gdi_set_layer_start(int layer, int x, int y) { (void)layer; (void)x; (void)y; }
 void gdi_set_layer_enable(int layer, int enable) { (void)layer; (void)enable; }
@@ -38,7 +41,22 @@ void gdi_set_layer_src(int layer, void *src, int w, int h, int fmt)
 {
     (void)layer; (void)src; (void)w; (void)h; (void)fmt;
 }
-void *gdi_get_frame_buffer_addr(int layer) { (void)layer; return p8_panel_fb; }
+void *gdi_get_frame_buffer_addr(int layer) { (void)layer; return p8_screen_fb; }
+
+void gdi_display_update_async(void (*cb)(bool complete, void *user_data), void *user_data)
+{
+    int y;
+    if (!p8_sx_ready) {
+        gdi_sx_init(p8_sx);
+        p8_sx_ready = 1;
+    }
+    for (y = 0; y < GDI_OUT_H; y++)
+        gdi_expand_row(p8_screen_fb, p8_sx, y, p8_panel_fb + (uint32_t)y * GDI_OUT_W);
+    p8_panel_draws++;
+    p8_panel_bytes += (uint32_t)GDI_OUT_W * GDI_OUT_H * 2u;
+    if (cb)
+        cb(true, user_data);
+}
 
 /* femto8's allocator: p8_emu.h maps malloc/free onto these. */
 void *rh_malloc(size_t n) { return malloc(n); }

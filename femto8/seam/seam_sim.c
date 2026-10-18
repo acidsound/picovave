@@ -19,11 +19,16 @@
 
 uint32_t gamepad;                        /* p8_input.c reads this when !SDL */
 
-/* femto8 renders 240x240 native RGB565 straight into this; sim_fb() exposes it to
- * the page, whose toRGBA() reads it as a Uint16Array (native, no byte swap). */
-uint16_t p8_panel_fb[240 * 240];
+/* femto8 renders PICO-8's own 128x128 screen (gdi.h) into p8_screen_fb. p8_panel_fb is the
+ * 240x240 the page shows: sim_fb() exposes it and the page's toRGBA() reads it as a
+ * Uint16Array (native, no byte swap), so the expand below is the only difference from a
+ * cart frame - the same gdi_expand_row() the board blits row by row. */
+uint16_t p8_screen_fb[GDI_W * GDI_H];
+uint16_t p8_panel_fb[GDI_OUT_W * GDI_OUT_H];
 uint32_t p8_panel_draws;
 uint32_t p8_panel_bytes;
+static uint8_t p8_sx[GDI_OUT_W];
+static int p8_sx_ready;
 
 void gdi_set_layer_start(int layer, int x, int y) { (void)layer; (void)x; (void)y; }
 void gdi_set_layer_enable(int layer, int enable) { (void)layer; (void)enable; }
@@ -31,12 +36,19 @@ void gdi_set_layer_src(int layer, void *src, int w, int h, int fmt)
 {
     (void)layer; (void)src; (void)w; (void)h; (void)fmt;
 }
-void *gdi_get_frame_buffer_addr(int layer) { (void)layer; return p8_panel_fb; }
+void *gdi_get_frame_buffer_addr(int layer) { (void)layer; return p8_screen_fb; }
 
 void gdi_display_update_async(void (*cb)(bool complete, void *user_data), void *user_data)
 {
+    int y;
+    if (!p8_sx_ready) {
+        gdi_sx_init(p8_sx);
+        p8_sx_ready = 1;
+    }
+    for (y = 0; y < GDI_OUT_H; y++)
+        gdi_expand_row(p8_screen_fb, p8_sx, y, p8_panel_fb + (uint32_t)y * GDI_OUT_W);
     p8_panel_draws++;
-    p8_panel_bytes += 240u * 240u * 2u;
+    p8_panel_bytes += (uint32_t)GDI_OUT_W * GDI_OUT_H * 2u;
     if (cb)
         cb(true, user_data);
 }

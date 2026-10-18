@@ -12,8 +12,8 @@
  * tools/build_sim.py --device-alloc compiles THIS file instead of the probe, in the same build,
  * with the same rename of malloc/free/realloc/calloc to sim_*: the whole simulator - the engine's
  * boot, every cart in sim_test.mjs, the page's uploads - then runs on femto8/stub/device/alloc.c
- * over an arena of the device's own 294,912 B (0x48000, app.ld's POOL). A cart that the modelled
- * probe says fits but this allocator cannot serve now fails the run instead of failing a flash.
+ * over the DEVICE's own arena. A cart that the modelled probe says fits but this allocator cannot
+ * serve now fails the run instead of failing a flash.
  *
  * The peak is read from alloc.c's own headers (the block size, header + footer + rounding), so it
  * is what the pool really spends - a little above the probe's charge when a first-fit hands a
@@ -22,11 +22,25 @@
 #include <stdint.h>
 #include <string.h>
 
-#define PV_ARENA 294912u                  /* app.ld: POOL 0x01C2C000 + 0x48000 */
-static uint8_t pv_arena[PV_ARENA] __attribute__((aligned(8), used));
+/* app.ld: the arena is [_pool_start,_pool_top) - .data/.bss, then .pool, one RAM region, so its
+ * size is 0x01C74000 (. _guard0) minus wherever .bss ends. tools/verify_final.py reads the same
+ * number back out of build/picovave/picovave.map and fails if this constant has drifted from it
+ * (and from the page's, sim_test.mjs's and host/alloc_test.c's copies). */
+#define PV_ARENA 414184u                  /* app.ld: [_pool_start,_pool_top), 0x01C0EE18..0x01C74000 */
+
+/* ...but this is a SIMULATOR, so the arena can be any size a harness asks for: PV_ARENA_MAX is
+ * just the array, and sim_arena_set() picks how much of it alloc.c may use - which answers "how
+ * big an arena would this cart NEED?" without a rebuild (that question is what decided the squeeze
+ * in docs/HANDOVER.md 12: a cart's cost-model peak is not the same as the arena it can survive in,
+ * because the device allocator's refusal makes Lua run a full GC and retry). set it BEFORE the
+ * first allocation (sim_init()/p8_init()): alloc.c initialises its heap once, lazily, and there is
+ * no reset. PV_ARENA is what the DEVICE links and what every other copy must match. */
+#define PV_ARENA_MAX (1024u * 1024u)
+static uint8_t pv_arena[PV_ARENA_MAX] __attribute__((aligned(8), used));
+static uint32_t pv_arena_len = PV_ARENA;
 
 #define PV_POOL_START pv_arena            /* alloc.c's seam: the arena, not the linker's POOL */
-#define PV_POOL_TOP  (pv_arena + PV_ARENA)
+#define PV_POOL_TOP  (pv_arena + pv_arena_len)
 
 /* The build renames the four functions for the probe; undo that for alloc.c's own definitions,
  * then give them pv_ names so this file's sim_* wrappers can count what they do. */
@@ -115,3 +129,10 @@ EXPORT void sim_heap_reset(void) { peak = used; refused = 0; }
 EXPORT unsigned sim_heap_refused(void) { return (unsigned)refused; }
 /* 1: this build's heap IS femto8/stub/device/alloc.c. sim/heap_probe.c says 0. */
 EXPORT unsigned sim_device_alloc(void) { return 1u; }
+/* The sweep knob: how much of the arena array alloc.c may use. Returns what is in force now, so a
+ * harness can check what it set. Must be called before the first allocation (see above). */
+EXPORT void sim_arena_set(unsigned bytes)
+{
+    pv_arena_len = (bytes >= 4096u && bytes <= PV_ARENA_MAX) ? (bytes & ~(uint32_t)7) : PV_ARENA;
+}
+EXPORT unsigned sim_arena_get(void) { return (unsigned)pv_arena_len; }

@@ -58,19 +58,22 @@ CFLAGS = ["-Os", "-ffunction-sections", "-fno-builtin", "-Wall", "-Wno-unused-fu
           "-Wno-macro-redefined"]
 LINE = re.compile(r"^\s*([0-9a-f]+):\s+((?:[0-9a-f]{2} )+)\s*\t(.*)$")
 ROM_LO, ROM_HI = 0xFFC00000, 0xFFD00000       # the chip's mask ROM: nothing may call or load it
-RAM_LEN, POOL_LEN = 144 * 1024, 0x48000       # app.ld: RAM .data/.bss and the Lua-heap region
+RAM_ORIGIN = 0x01C01400                       # app.ld: start of the RAM region (RAMTEXT ends here)
+RAM_LEN = 0x72C00                             # app.ld: .data/.bss AND the Lua heap, one region
 # The engine's boot buffers (p8_emu.c). Upstream allocates m_memory, m_cart_memory,
 # m_overlay_memory, m_lua_script plus the file/text-parse scratch (m_file_buffer,
 # m_decompression_buffer, m_temp_cart_memory, m_temp_lua_script); picovave's cooked-cart-only patch
 # leaves the scratch NULL, reads the cartridge ROM out of the cart itself, and materialises the Lua
-# source only while a cart loads - so POOL's 293,888 B (minus a red zone) is nearly all Lua.
+# source (sized to the cart's own script, not to the 64 KiB maximum) only while a cart loads.
 # ENGINE_HEAP is what the engine holds for the whole time a cart runs (PICO-8's 64 KiB address space
-# + the overlay screen); LOAD_PEAK_HEAP is the worst load moment (+ the 64 KiB source buffer), and
-# that is what has to fit alongside a cart while it loads. Kept in step with femto8/src/p8_emu.c's
-# p8_init()/p8_materialize_script() and femto8/stub/device/alloc.c (which reads _pool_start/_pool_top).
+# + the overlay screen); LOAD_PEAK_HEAP is the worst load moment (+ a full-size source buffer), and
+# that is what has to fit alongside a cart while it loads. The arena itself is NOT a constant here:
+# it is _pool_top - _pool_start, measured from the link (app.ld puts .pool straight after .bss), so
+# every byte of static the app gives up is a byte of heap and nothing can drift.
 # How much a CART needs cannot be computed here - Lua costs 10-20x the source - so it is measured
-# instead: the simulator's wasm counts the same allocations the device's pool would serve
-# (sim/heap_probe.c) and sim_test.mjs reports every served cart against this same 293,888 B.
+# instead: the simulator's wasm links the SAME allocator (femto8/stub/device/alloc.c through
+# sim/device_alloc.c, the default tools/build_sim.py flavor) and runs the cart inside this same
+# arena, so sim_test.mjs and the page report what the device's pool really did - peak and refusals.
 ENGINE_HEAP = (65536 + 8192)
 LOAD_PEAK_HEAP = (ENGINE_HEAP + 65536)        # + the Lua source buffer, live only during a load
 PV_POOL_GUARD = 1024                          # femto8/stub/device/alloc.c's red zone
@@ -352,19 +355,26 @@ def build_app(fm1pkg_make, product):
             val = (int(v[0]) & 0xFFFFFFFF) if v[0] else int(v[1], 16) & 0xFFFFFFFF
             if ROM_LO <= val < ROM_HI:
                 errors.append("reference to ROM address %#010x: %s" % (val, ins.strip()[:70]))
-    bss = symv("_bss_end") - 0x01C08000
-    pool_used = symv("_pool_end") - symv("_pool_start")
-    heap = POOL_LEN - PV_POOL_GUARD - pool_used       # femto8/stub/device/alloc.c's red zone
+    bss = symv("_bss_end") - RAM_ORIGIN
+    pool_lo, pool_hi = symv("_pool_start"), symv("_pool_top")
+    pool_len = pool_hi - pool_lo
+    pool_used = symv("_pool_end") - pool_lo
+    heap = pool_len - PV_POOL_GUARD - pool_used       # femto8/stub/device/alloc.c's red zone
     notes.append("image %d B (slot %#x)" % (len(img), app_slot))
-    notes.append("RAM .data+.bss %d B of %d; .pool in use %d B" % (bss, RAM_LEN, pool_used))
-    notes.append("Lua heap %d B (POOL %#x - %d B red zone - engine %d B)"
-                 % (heap, POOL_LEN, PV_POOL_GUARD, ENGINE_HEAP))
+    notes.append("RAM .data+.bss %d B, then the arena: %d B (%#x..%#x, .pool in use %d B)"
+                 % (bss, pool_len, pool_lo, pool_hi, pool_used))
+    notes.append("Lua heap %d B (arena - %d B red zone - engine %d B)" % (heap, PV_POOL_GUARD, ENGINE_HEAP))
     notes.append("engine buffers peak at %d B while a cart loads; everything else (%d B) is Lua"
                  % (LOAD_PEAK_HEAP, heap - LOAD_PEAK_HEAP))
-    if bss > RAM_LEN:
-        errors.append("RAM region overflow (%d B of %d)" % (bss, RAM_LEN))
+    # The pool must end at the stack guard the device wires into fm1_guard.h: a byte past it is a
+    # write the guard traps, so _pool_top is not free to drift with app.ld's region length.
+    if pool_hi != 0x01C74000:
+        errors.append("pool top %#x is not the stack guard 0x01C74000 (app.ld: _guard0)" % pool_hi)
+    if bss + pool_len > RAM_LEN:
+        errors.append("RAM region overflow: .data+.bss %d + arena %d > %d" % (bss, pool_len, RAM_LEN))
     if heap - LOAD_PEAK_HEAP < MIN_LUA_HEAP:
-        errors.append("Lua heap %d B leaves %d B for Lua at load (need %d): widen POOL in app.ld"
+        errors.append("Lua heap %d B leaves %d B for Lua at load (need %d): shrink the app's statics"
+                      " (.data/.bss) - the arena follows them"
                       % (heap, heap - LOAD_PEAK_HEAP, MIN_LUA_HEAP))
     # architecture check: OUR code touches no register - the device register access is Makkuro37's
     # firmware/hal, reused verbatim, so the only thing that can differ from the hardware-proven build

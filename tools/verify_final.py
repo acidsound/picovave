@@ -514,16 +514,34 @@ def main():
     check("p8png.mjs's cook size is the wire payload's minus its magic",
           "COOKED_SIZE = PNG_WIDTH * PNG_HEIGHT" in p8png
           and "CART_LEN = COOKED_MAGIC.length + COOKED_SIZE" in p8png)
-    # "Does this cart run on the device?" is decided by ONE number - how high the device's pool
-    # gets - and the page must MEASURE it rather than guess from the cart's size (Lua costs 10-20x
-    # the source). The measurement is the wasm's (sim/heap_probe.c) and its budget must be the
-    # firmware's own POOL_LEN minus the allocator's red zone, not a second, drifting constant.
+    # "Does this cart run on the device?" is decided by MEASURING it in the device's own allocator
+    # over the device's own arena, not by guessing from the cart's size (Lua costs 10-20x the source).
+    # tools/build_sim.py's default wasm is that allocator (sim/device_alloc.c; --probe-alloc is the
+    # cost-model escape hatch), and its budget must be the arena the DEVICE really links, not a
+    # second, drifting constant. That arena is a link-time number: app.ld puts .data/.bss and .pool in
+    # ONE RAM region that ends at the stack guard, so the arena is [_pool_start (wherever .bss ends),
+    # 0x01C74000). build/picovave/picovave.map pins it down, and every copy of it - the default build,
+    # host/alloc_test.c, the page, sim_test.mjs - must agree with the link, or a cart the page clears
+    # fails on the instrument.
     bp = (SRC / "tools" / "build_picovave.py").read_text()
-    pool_len = int(re.search(r"POOL_LEN = [^,]+, (0x[0-9a-fA-F]+)", bp).group(1), 16)
     guard = int(re.search(r"PV_POOL_GUARD = (\d+)", bp).group(1))
-    check("the page judges a cart against the device's own pool (not a second constant)",
-          "const DEVICE_HEAP = %d - %d;" % (pool_len, guard) in page,
-          "POOL_LEN %d - red zone %d = %d" % (pool_len, guard, pool_len - guard))
+    sim_test = (SRC / "sim" / "sim_test.mjs").read_text()
+    arena_dev = int(re.search(r"#define PV_ARENA (\d+)u", (SRC / "sim" / "device_alloc.c").read_text()).group(1))
+    arena_test = int(re.search(r"#define ARENA (\d+)u", (SRC / "host" / "alloc_test.c").read_text()).group(1))
+    arena_page = int(re.search(r"const DEVICE_HEAP = (\d+) -", page).group(1))
+    arena_mjs = int(re.search(r"const DEVICE_HEAP = (\d+) -", sim_test).group(1))
+    mapf = SRC / "build" / "picovave" / "picovave.map"
+    link = None
+    if mapf.exists():
+        msym = dict((n, int(a, 16)) for a, n in
+                    re.findall(r"^\s*0x([0-9a-f]+)\s+(_pool_start|_pool_top) =", mapf.read_text(), re.M))
+        if "_pool_start" in msym and "_pool_top" in msym:
+            link = msym["_pool_top"] - msym["_pool_start"]
+    check("the page judges a cart against the arena the device really links (one number, no drift)",
+          link is not None and arena_dev == arena_test == arena_page == arena_mjs == link
+          and re.search(r"const DEVICE_HEAP = \d+ - %d;" % guard, page) is not None,
+          "link _pool_start.._pool_top %d B; device_alloc %d; alloc_test %d; page %d; sim_test %d"
+          % (link if link is not None else -1, arena_dev, arena_test, arena_page, arena_mjs))
     check("the page measures the cart in a throwaway wasm before sending it",
           "async function measureCart" in page and "ex.sim_heap_peak()" in page
           and "probeMods[fw]" in page and "MEASURE_FRAMES" in page)
@@ -603,28 +621,39 @@ def main():
                                                   else "crash-boot.ppm")
         cr = subprocess.run([str(prev_bin), crash_mode, str(crash_ppm)],
                             capture_output=True, text=True, cwd=SRC)
-        bands = [(26, 44), (48, 66), (74, 86), (92, 104), (110, 122), (128, 140), (146, 158),
-                 (164, 176), (182, 194), (200, 212), (218, 230)]  # the build band is the tenth
+        # The screen is drawn on PICO-8's own 128x128 surface and the panel is 240x240, so the
+        # seam expands it nearest-neighbour: canvas row r lands on the panel rows whose source
+        # index is r. Compute where each line's ink goes instead of hand-maintaining band tables
+        # - the geometry is (0, 14) for the headline and twelve 9-px lines from canvas y=16,
+        # which is hg_crash_screen()'s layout.
+        def band(r0, r1):
+            lo = -(-(r0 * 240) // 128)          # first panel row reading canvas row r0
+            hi = -(-(r1 * 240) // 128) - 1      # last one reading canvas row r1-1
+            return max(0, lo), min(239, hi)
+        crash_lines = [(0, 14)] + [(16 + 9 * i, 23 + 9 * i) for i in range(12)]
+        bands = [band(r0, r1) for r0, r1 in crash_lines]
         try:
             raw = crash_ppm.read_bytes()
             body = raw.split(b"\n255\n", 1)[1]
             px = lambda x, y: body[(y * 240 + x) * 3:(y * 240 + x) * 3 + 3]     # P6, 240x240
             bad = []
             for i, (y0, y1) in enumerate(bands):
-                xs = [x for y in range(y0, y1) for x in range(240) if px(x, y) != b"\0\0\0"]
+                xs = [x for y in range(y0, y1 + 1) for x in range(240) if px(x, y) != b"\0\0\0"]
                 if not xs:
                     bad.append("line %d is empty" % (i + 1))
                 elif min(xs) < 4 or max(xs) > 235:
                     bad.append("line %d reaches x=%d..%d" % (i + 1, min(xs), max(xs)))
-            gaps = [(44, 48), (66, 74), (86, 92), (104, 110), (122, 128), (140, 146), (158, 164),
-                (176, 182), (194, 200), (212, 218)]
-            for y0, y1 in gaps:
-                if any(px(x, y) != b"\0\0\0" for y in range(y0, y1) for x in range(240)):
+            for i in range(len(bands) - 1):
+                y0, y1 = bands[i][1] + 1, bands[i + 1][0] - 1
+                if y0 <= y1 and any(px(x, y) != b"\0\0\0"
+                                    for y in range(y0, y1 + 1) for x in range(240)):
                     bad.append("two lines collide at y=%d..%d" % (y0, y1))
-            check("%s renders 11 lines inside the panel (the last names the build)" % crash_name,
-                  cr.returncode == 0 and not bad, "; ".join(bad)[:160])
+            check("%s renders %d lines inside the panel (the last names the build)"
+                  % (crash_name, len(bands)), cr.returncode == 0 and not bad,
+                  "; ".join(bad)[:160])
         except (OSError, IndexError) as e:
-            check("%s renders 11 lines inside the panel (the last names the build)" % crash_name, False, str(e)[:160])
+            check("%s renders %d lines inside the panel (the last names the build)"
+                  % (crash_name, len(bands)), False, str(e)[:160])
 
     # The boot mark is painted from fm1_cstart before anything else this firmware added, so its
     # presence in the image is what makes the panel able to answer "did the new build run at all".
@@ -632,6 +661,20 @@ def main():
           "pv_early_mark" in (SRC / "src" / "picovave.c").read_text()
           and (SRC / "src" / "picovave.c").read_text().index("pv_early_mark();")
           < (SRC / "src" / "picovave.c").read_text().index("pv_stack_paint();"))
+
+    # The page's verdict on a cart is only a verdict if the wasm it loads IS the device's allocator
+    # running in the device's own arena. tools/build_sim.py's DEFAULT build is that (--probe-alloc
+    # is the cost-model escape hatch), the RUNNING simulator instance is handed the whole arena
+    # array so a cart too big for the hardware still plays, and the throwaway measurement instance
+    # keeps the default PV_ARENA - the device's number, pinned by the five-way agreement above.
+    bsim_txt = (SRC / "tools" / "build_sim.py").read_text()
+    page_txt = (SRC / "web" / "sim" / "index.html").read_text()
+    check("the page's own wasm is the device's allocator, in the device's own arena",
+          'if a.probe_alloc else (SIM / "device_alloc.c")' in bsim_txt
+          and "instantiateModule(probeMods[k], DEVICE_ARENA_MAX)" in page_txt
+          and "DEVICE_ARENA_MAX = 1024 * 1024" in page_txt
+          and "sim_arena_set" in page_txt
+          and "ex = await instantiateModule(mod)" in page_txt)
 
     if not sim_wasm.exists():
         check("simulator built (build/sim/sim.wasm)", False, "run tools/build_sim.py")
@@ -790,22 +833,25 @@ def main():
           '#include "lcd.c"' in fw and '#include "fm1_lcd_hw.h"' in fw
           and "lcd_init(" in fw and "lcd_blit(" in fw)
     # the OTA / rescue / crash screens reuse the shared drawing core (picovave_gfx.h) by aliasing
-    # its canvas onto the panel framebuffer, so they cost no extra RAM - and those pixels are
-    # already big endian, which is why they are blitted without a swap.
+    # its canvas onto PICO-8's own screen surface - the same 32,768 B of .bss the engine renders a
+    # cart into, so those screens cost no extra RAM at all.
     check("firmware reuses the shared screens for OTA / rescue / crash",
-          '#include "picovave_gfx.h"' in fw and "#define hg_fb p8_panel_fb" in fw)
+          '#include "picovave_gfx.h"' in fw and "#define hg_fb p8_screen_fb" in fw)
     # the analog inputs come from Makkuro37's ADC mux too: the pads carry velocity, the faders
     # and the two wheels are read from fm1_in, exactly as the simulator's sim_pad/fader/wheel do.
     check("firmware reads pads/faders/wheels from Makkuro37's HAL",
           "fm1_in.pad_press" in fw and "fm1_in.fader" in fw and "fm1_in.wheel" in fw)
-    # The panel push. femto8 renders NATIVE RGB565 into p8_panel_fb; the ST7789 takes it big
-    # endian; so the device swaps the framebuffer in place. The host preview performs the same
-    # swap on the same buffer, which is why the two screens can be compared byte for byte.
-    check("the device swaps the engine's RGB565 for the panel's big endian",
-          "gdi_display_update_async(" in fw and "(v >> 8) | (v << 8)" in fw and "lcd_blit(" in fw)
-    check("the host preview performs the same swap",
-          "gdi_display_update_async(" in hal_files["preview"]
-          and "(v >> 8) | (v << 8)" in hal_files["preview"])
+    # The panel push. femto8 renders NATIVE RGB565 into p8_screen_fb (PICO-8's own 128x128), and
+    # pv_push() expands ONE row (gdi_expand_row), swaps that row for the ST7789's big endian and
+    # hands it to lcd_blit - so a whole 240x240 panel frame never exists in RAM. That row buffer is
+    # what bought back the 82,432 B the old 240x240 canvas held (docs/HANDOVER.md §13).
+    check("the device expands the engine's 128x128 screen one row at a time, swapped for the panel",
+          "gdi_expand_row(p8_screen_fb" in fw and "(v >> 8) | (v << 8)" in fw
+          and "lcd_blit(0u, (uint32_t)y, GDI_OUT_W, 1u, pv_row)" in fw
+          and "static uint16_t pv_row[" in fw)
+    check("the host preview captures the same seam expansion of the same surface",
+          "gdi_display_update_async(0, 0)" in hal_files["preview"]
+          and "memcpy(cap, p8_panel_fb" in hal_files["preview"])
 
     # the device is reachable and re-flashable, like Makkuro37: its USB-MIDI + M-UPGRADE stack,
     # the 10 kHz TIMER5 tick that drives it, and the escapes back to the mask-ROM UBOOT.
@@ -880,8 +926,12 @@ def main():
           "len != PV_CART_LEN" in cart_h_raw and "memcmp(m, PV_COOKED_MAGIC" in cart_h_raw)
     check("the device expands the code section with femto8's own decompressor",
           "p8_load_cooked(" in engine_c and "pico8_code_section_decompress(" in engine_c)
-    check("the expansion targets the full Lua script buffer (upstream overflowed a 32 KiB one)",
-          "m_lua_script, LUA_SCRIPT_SIZE - 1)" in engine_c)
+    check("the expansion buffer is sized to the cart's own script, not to the 64 KiB maximum",
+          "script_size = src[4] * 256 + src[5]" in engine_c
+          and "(uint8_t *)m_lua_script, script_size);" in engine_c
+          and "m_lua_script[script_size] = '\\0'" in engine_c
+          and "script_size = 0x3d00;" in engine_c
+          and "script_size = LUA_SCRIPT_SIZE - 1;" in engine_c)
     # The boot ladder has to hand the pool back before EVERY candidate, or a cart the device cannot
     # run takes the device down with it. Both halves were real on the SMK-37 Pro (baba uploaded, the
     # panel then stayed on its boot screen for good) and neither was a hardware fault:
@@ -965,12 +1015,12 @@ def main():
     bp = (SRC / "tools" / "build_picovave.py").read_text()
     check("the build's ENGINE_HEAP matches the buffers p8_init() really allocates",
           "ENGINE_HEAP = (65536 + 8192)" in bp and "LOAD_PEAK_HEAP" in bp)
-    # The device's allocator is the one piece of the ROM that no other test can reach: the wasm
-    # runs sim/heap_probe.c over emscripten's heap, the host preview links the host's libc, and
-    # sim/device_alloc.c (tools/build_sim.py --device-alloc) is the only build that runs THIS code
-    # inside the whole engine. Build it and hand it the device's own arena, so a broken split or a
-    # lost realloc fails here instead of on the instrument - which is exactly how the malloc that
-    # wrote a block header over the sentinel (and a footer outside the pool) reached a flash.
+    # The device's allocator is the one piece of the ROM that no other test can reach: the host
+    # preview links the host's libc, and the wasm links sim/device_alloc.c - which IS this code -
+    # in the device's own arena, so a cart is judged by what the pool really did. Build the same
+    # allocator on the host too, so a broken split or a lost realloc fails here instead of on the
+    # instrument - which is exactly how the malloc that wrote a block header over the sentinel
+    # (and a footer outside the pool) reached a flash.
     alloc_bin = SRC / "build" / "alloc_test"
     try:
         alloc_bin.parent.mkdir(parents=True, exist_ok=True)

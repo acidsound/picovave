@@ -72,6 +72,14 @@
 #define PATH_MAX 256
 #endif
 
+/* picovave: the two path GLOBALS below hold a cart name (31 bytes by the wire format) and the
+ * single character "." - nothing else ever reaches them, because a cooked cart is loaded from
+ * flash and no file is opened. The toolchain's PATH_MAX is 4,096, so they were 8,192 bytes of
+ * static RAM for a 31-byte string: fifteen times the whole shortfall of the smallest cart the
+ * device could not run (docs/HANDOVER.md §7). The engine's own file/dir paths keep PATH_MAX;
+ * they are unreachable here, and the smaller globals cannot truncate anything that runs. */
+#define PV_CART_PATH_MAX 64
+
 #define P8_WIDTH 128
 #define P8_HEIGHT 128
 #define MEMORY_SPRITES 0
@@ -273,8 +281,8 @@ extern char    *m_temp_lua_script;
 
 extern char *m_font;
 
-extern char m_current_cart_dir[PATH_MAX];
-extern char m_current_cart_file_name[PATH_MAX];
+extern char m_current_cart_dir[PV_CART_PATH_MAX];
+extern char m_current_cart_file_name[PV_CART_PATH_MAX];
 extern char m_breadcrumb[256];
 extern char m_clipboard[1024];
 extern char m_param_string[256];

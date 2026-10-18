@@ -2,19 +2,25 @@
  * Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments */
 /* Felucca memory map.
  * Code + constants execute in place from XIP (app.bin offset 0 = 0x02000120).
- * 0x01C00000..0x01C06000 holds .ram_text (code that must run while the flash
- * is busy: the flash driver); 0x01C06000..0x01C08000 stays for RAM-run debug.
- * RAM  : .data/.bss (144 KiB: the panel is 115,200 of it)
- * POOL : big zero-initialised buffers (FX lines, canvases), section .pool
- *        (picovave puts NOTHING in .pool: its Lua heap is [_pool_start,_pool_top))
+ * 0x01C00000..0x01C01400 holds .ram_text (code that must run while the flash is
+ * busy: the flash driver; it used to be given 24 KiB and the 20 KiB it never
+ * used, plus the 8 KiB "RAM-run debug" reserve after it, are the Lua heap now).
+ * RAM  : .data/.bss, then the pool right behind them - ONE region, so the heap
+ *        starts at whatever .bss ends at. (It used to be two regions with a
+ *        hand-set 1,848-byte hole between them, 0x01C2C000; the smallest cart
+ *        that still failed was 527 B short.) The app's static half is now
+ *        PICO-8's own 128x128 screen (32,768 B) rather than a 240x240 panel
+ *        frame (115,200 B): the 128->240 scale happens a row at a time on the
+ *        way out, in src/picovave.c.
+ * POOL : [_pool_start,_pool_top) is picovave's Lua heap; section .pool itself
+ *        holds nothing (alloc.c sizes its arena from the linker's symbols).
  * STACKS with 256-byte guard bands; NOINIT survives resets and UBOOT entry.
  * 0x01C7FD50.. is reserved: boot_info, boot-state mailbox, vector table. */
 MEMORY
 {
     XIP    (rx)  : ORIGIN = 0x02000120, LENGTH = 0x8DFBC
-    RAMTEXT (rwx): ORIGIN = 0x01C00000, LENGTH = 0x6000
-    RAM    (rwx) : ORIGIN = 0x01C08000, LENGTH = 144K
-    POOL   (rw)  : ORIGIN = 0x01C2C000, LENGTH = 0x48000
+    RAMTEXT (rwx): ORIGIN = 0x01C00000, LENGTH = 0x1400
+    RAM    (rwx) : ORIGIN = 0x01C01400, LENGTH = 0x72C00
     NOINIT (rw)  : ORIGIN = 0x01C7C000, LENGTH = 0x3D50
 }
 SECTIONS
@@ -25,8 +31,9 @@ SECTIONS
     .data : { . = ALIGN(4); _data_start = .; *(.data*) *(.sdata*) . = ALIGN(4); _data_end = .; } > RAM AT > XIP
     _data_load = LOADADDR(.data);
     .bss (NOLOAD) : { _bss_start = .; *(.bss*) *(.sbss*) *(COMMON) . = ALIGN(4); _bss_end = .; } > RAM
-    .pool (NOLOAD) : { _pool_start = .; *(.pool*) . = ALIGN(4); _pool_end = .; } > POOL
-    _pool_top = ORIGIN(POOL) + LENGTH(POOL);
+    .pool (NOLOAD) : { . = ALIGN(8); _pool_start = .; *(.pool*) . = ALIGN(8); _pool_end = .; } > RAM
+    /* The pool runs to the stack guard: every byte between .bss and here is the Lua heap. */
+    _pool_top = ORIGIN(RAM) + LENGTH(RAM);
     .noinit (NOLOAD) : { *(.noinit*) } > NOINIT
     _guard0 = 0x01C74000; _ustack_lo = 0x01C74100; _ustack_top = 0x01C7A000;
     _guard1 = 0x01C7A000; _sstack_lo = 0x01C7A100; _sstack_top = 0x01C7C000;

@@ -11,7 +11,8 @@
  *   sim_button, sim_key, sim_enc, sim_pad, sim_fader, sim_wheel, sim_midi,
  *   sim_rate, sim_render, sim_out_l, sim_out_r, sim_pads, sim_leds,
  *   sim_sysex_in, sim_sysex, sim_cart_active, sim_cart_replies, sim_cart_reply,
- *   sim_reply, sim_reply_len, sim_heap_peak, sim_heap_used (sim/heap_probe.c).
+ *   sim_reply, sim_reply_len, sim_heap_peak, sim_heap_used (sim/device_alloc.c - the device's own
+ *   allocator; sim/heap_probe.c's cost model with --probe-alloc).
  *
  * The cart store and the SysEx upload protocol are the firmware's own too: sim.c implements the
  * device's three store operations over a RAM array and includes ../src/picovave_cart.h, so the
@@ -92,7 +93,7 @@ uint32_t hh_cart_size(void)
 int hh_cart_next(void) { return pv_run_next(); }
 void hh_boot_stage(int stage) { (void)stage; }   /* no panel here; the page shows its own status */
 
-/* ---- the panel framebuffer (femto8 renders straight into it) ---------------- */
+/* ---- the panel framebuffer: what p8_screen_fb is expanded into -------------- */
 extern uint16_t p8_panel_fb[240 * 240];
 extern uint32_t p8_panel_draws;
 extern uint32_t p8_panel_bytes;
@@ -114,8 +115,9 @@ static int      sim_init_done;
 #define EXPORT __attribute__((used, visibility("default")))
 #endif
 
-/* sim/heap_probe.c: the engine's allocator is renamed onto these in the wasm build, so the pool a
- * cart needs is measured, not estimated. sim_heap_reset() restarts that measurement. */
+/* The wasm's allocator (femto8/stub/device/alloc.c, through sim/device_alloc.c, in the device's
+ * own arena - or sim/heap_probe.c's cost model with --probe-alloc): the pool a cart needs is
+ * measured, not estimated. sim_heap_reset() restarts that measurement. */
 void sim_heap_reset(void);
 
 /* Power on: exactly the app's own boot path, then the first frame. */
@@ -130,7 +132,8 @@ EXPORT void sim_init(void)
     picovave_boot();
     /* Measure from here: the boot has already dropped whatever cart was running (p8_begin()
      * closes the Lua state) and re-allocated the engine's own buffers, so what is left - and what
-     * the peak grows from - is exactly the device's pool after a boot (sim/heap_probe.c). */
+     * the peak grows from - is exactly the device's pool after a boot (femto8/stub/device/alloc.c's
+     * own high-water mark). */
     sim_heap_reset();
 }
 

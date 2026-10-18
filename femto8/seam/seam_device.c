@@ -23,11 +23,13 @@
 
 uint32_t gamepad;                        /* p8_input.c reads this when !SDL; set in picovave_frame */
 
-/* femto8 renders 240x240 native RGB565 straight into this (gdi_get_frame_buffer_addr).
- * It lives in .bss: 115,200 of the new 136 KiB RAM. The panel wants big endian, so
- * picovave's gdi_display_update_async byte-swaps it in place right before lcd_blit -
- * safe because p8_render() rewrites all 240 rows every frame. */
-uint16_t p8_panel_fb[240 * 240];
+/* femto8 renders PICO-8's own 128x128 screen here (gdi_get_frame_buffer_addr, gdi.h): 32,768 B
+ * of .bss, and every byte .bss does not use is Lua heap (app.ld: .pool sits right behind .bss,
+ * alloc.c reads the linker's _pool_start). This used to be the 240x240 panel framebuffer,
+ * 115,200 B - 82,432 B of Lua the 45 KB carts never got. The 128->240 scale is now
+ * gdi_expand_row(), applied by src/picovave.c one 240-pixel row at a time on its way to
+ * lcd_blit(), so a whole panel frame never exists in RAM. */
+uint16_t p8_screen_fb[GDI_W * GDI_H];
 uint32_t p8_panel_draws;
 uint32_t p8_panel_bytes;
 
@@ -39,7 +41,7 @@ void gdi_set_layer_src(int layer, void *src, int w, int h, int fmt)
 {
     (void)layer; (void)src; (void)w; (void)h; (void)fmt;
 }
-void *gdi_get_frame_buffer_addr(int layer) { (void)layer; return p8_panel_fb; }
+void *gdi_get_frame_buffer_addr(int layer) { (void)layer; return p8_screen_fb; }
 
 /* femto8's allocator: p8_emu.h maps malloc/free onto these. Same heap as everyone
  * else's (femto8/stub/device/alloc.c), which is what keeps the engine's boot

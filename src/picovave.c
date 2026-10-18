@@ -41,7 +41,8 @@
  *   - it can drop to the mask-ROM UBOOT: OCT- + OCT+ held 5 s, the USB SysEx soft key
  *     (F0 22 24 35 7D F7), and after two failed boots (bootguard) automatically
  *
- * The panel framebuffer (p8_panel_fb) and the allocator are the femto8 seam
+ * The screen surface (p8_screen_fb: PICO-8's own 128x128, which this file draws its own screens
+ * into and scales) and the allocator are the femto8 seam
  * (femto8/seam/seam_device.c, femto8/stub/device/): this file only pushes pixels. */
 #include <stdbool.h>
 #include <stdint.h>
@@ -62,25 +63,52 @@
 #include "lcd.c"              /* lcd_init / lcd_blit, the stock ST7789 v016 sequence */
 
 /* ---- the shared screens (OTA / rescue / crash) ------------------------------------------
- * picovave_gfx.h draws into hg_fb; aliasing it onto the panel buffer means the rescue
- * screens cost no extra 115,200 B. Those helpers store RGB565 big endian, which is what
- * lcd_blit wants, so a screen is drawn then blitted with no byte swap - while the PICO-8
- * path (gdi_display_update_async, below) starts from the engine's native order and swaps. */
-#define HG_W 240
-#define HG_H 240
+ * picovave_gfx.h draws into hg_fb; aliasing it onto the engine's own screen (seam_device.c,
+ * gdi.h: 128x128 native RGB565, GDI_W x GDI_H) means the boot, crash, update and rescue
+ * screens cost no RAM of their own - and that a 240x240 frame never exists in RAM at all,
+ * only one row on its way to lcd_blit(). The helpers store native RGB565, like femto8's. */
 #include "picovave_font.h"
 #include "picovave_input.h"
-#define hg_fb p8_panel_fb
+#define hg_fb p8_screen_fb
 #include "picovave_gfx.h"
-#include "gdi.h"              /* gdi_display_update_async's own prototype */
+#include "gdi.h"              /* gdi_expand_row, gdi_display_update_async's own prototype */
 
-extern uint32_t p8_panel_draws, p8_panel_bytes;    /* femto8/seam/seam_device.c */
+extern uint16_t p8_screen_fb[GDI_W * GDI_H];       /* femto8/seam/seam_device.c */
+extern uint32_t p8_panel_draws, p8_panel_bytes;    /* ...and this file */
 
 static uint8_t panel_up;                 /* lcd_init() ran: the panel, and so a crash screen, is safe */
+
+/* One panel frame, 240 rows at a time: expand a row of the engine's screen (or of a screen
+ * picovave drew into it) and hand it to the ST7789 big endian. The row is the only frame-sized
+ * buffer in the app: 480 B, against the 115,200 B of .bss a 240x240 canvas used to cost - and
+ * .bss is Lua heap here (app.ld puts .pool right behind it). */
+static uint16_t pv_row[GDI_OUT_W];
+static uint8_t pv_row_sx[GDI_OUT_W];        /* pv_sx is the SysEx buffer further down */
+static uint8_t pv_row_sx_ready;
+
+static void pv_push(void)
+{
+    int y, x;
+    if (!pv_row_sx_ready) {
+        gdi_sx_init(pv_row_sx);
+        pv_row_sx_ready = 1;
+    }
+    for (y = 0; y < GDI_OUT_H; y++) {
+        gdi_expand_row(p8_screen_fb, pv_row_sx, y, pv_row);
+        for (x = 0; x < GDI_OUT_W; x++) {
+            uint16_t v = pv_row[x];
+            pv_row[x] = (uint16_t)((v >> 8) | (v << 8));
+        }
+        lcd_blit(0u, (uint32_t)y, GDI_OUT_W, 1u, pv_row);
+    }
+    p8_panel_draws++;
+    p8_panel_bytes += (uint32_t)GDI_OUT_W * GDI_OUT_H * 2u;
+}
+
 /* Guarded: the USB rescue runs headless (no lcd_init), and ota_show() still calls this - the
  * installer is the display there, so a blit into an unconfigured panel must be a no-op, not SPI
  * traffic into a controller nobody has brought up. */
-static void pv_blit(void) { if (panel_up) lcd_blit(0u, 0u, HG_W, HG_H, p8_panel_fb); }
+static void pv_blit(void) { if (panel_up) pv_push(); }
 
 /* ---- the stack, measured ---------------------------------------------------------------
  * The guard's write window under _ustack_lo catches a store off the bottom of the user stack,
@@ -186,9 +214,9 @@ static void pv_early_mark(void)
 {
     hh_lcd_init();
     hg_clear(HG_BLACK);
-    hg_text_center(88, "PICOVAVE", 3, HG_GREEN);
-    hg_text_center(126, PV_BUILD_TAG, 2, HG_WHITE);
-    hg_text_center(160, "BOOT MARK: THIS BUILD RAN", 1, HG_DIM);
+    hg_text_center(20, "PICOVAVE", 2, HG_GREEN);
+    hg_text_center(44, PV_BUILD_TAG, 1, HG_WHITE);
+    hg_text_center(62, "BOOT MARK: NEW IMAGE", 1, HG_DIM);
     pv_blit();
 }
 static void hh_input_init(void) { fm1_input_init(); }
@@ -253,13 +281,13 @@ static void hh_boot_stage(int stage)
     b[0] = (char)('0' + (stage % 10));
     b[1] = 0;
     hg_clear(HG_BLACK);
-    hg_text_center(96, "PICOVAVE BOOT", 2, HG_GREEN);
-    hg_text_center(128, b, 4, HG_WHITE);
+    hg_text_center(10, "PICOVAVE BOOT", 1, HG_GREEN);
+    hg_text_center(30, b, 4, HG_WHITE);
     /* the stack the run before this one used, so a healthy boot still shows the margin */
     p = hg_put(s, "STACK ", pv_stack_prev, 4);
     p = hg_put(p, "/", (uint32_t)((uintptr_t)_ustack_top - (uintptr_t)_ustack_lo), 4);
     *p = 0;
-    hg_text_center(170, s, 1, HG_DIM);
+    hg_text_center(78, s, 1, HG_DIM);
     pv_blit();
     if (stage == 1)
         pv_crash_report();            /* if the last boot died, this stays on the panel instead */
@@ -287,19 +315,13 @@ static void hh_input_read(hin_t *in)
 }
 
 /* ------------------------------------------------ the one femto8 display hook ---
- * femto8 renders NATIVE RGB565 into p8_panel_fb; the ST7789 takes it big endian, so swap in
- * place and blit. Rewriting in place is safe because p8_render() writes all 240 rows every
- * frame - there is no pixel the swap could double-apply. */
+ * femto8 has just written its 128x128 screen (seam_device.c, gdi.h) and this is the frame
+ * boundary: pv_push() scales and pushes it one row at a time. Same code the boot, crash and
+ * rescue screens go through, so what the panel shows and what the host preview captures are
+ * produced by one routine (tools/verify_final.py checks that they agree). */
 void gdi_display_update_async(void (*cb)(bool complete, void *user_data), void *user_data)
 {
-    uint32_t i;
-    for (i = 0; i < (uint32_t)HG_W * HG_H; i++) {
-        uint16_t v = p8_panel_fb[i];
-        p8_panel_fb[i] = (uint16_t)((v >> 8) | (v << 8));
-    }
-    lcd_blit(0u, 0u, HG_W, HG_H, p8_panel_fb);
-    p8_panel_draws++;
-    p8_panel_bytes += (uint32_t)HG_W * HG_H * 2u;
+    pv_push();
     if (cb)
         cb(true, user_data);
 }
@@ -444,9 +466,9 @@ static void ota_show(uint32_t step, int32_t code)
     char b[24];
     uint32_t k = 0, v;
     hg_clear(HG_BLACK);
-    hg_text_center(92, "UPDATE", 2, HG_WHITE);
+    hg_text_center(20, "UPDATE", 2, HG_WHITE);
     if (step < 9u) {
-        hg_text_center(124, STEP[step < 6u ? step : 0], 2, HG_GREEN);
+        hg_text_center(48, STEP[step < 6u ? step : 0], 1, HG_GREEN);
         pv_blit();
         return;
     }
@@ -463,7 +485,7 @@ static void ota_show(uint32_t step, int32_t code)
         b[k++] = (char)('0' + v % 10u);
         b[k] = 0;
     }
-    hg_text_center(124, b, 2, HG_GREEN);
+    hg_text_center(48, b, 1, HG_GREEN);
     pv_blit();
     fm1_delay_ms(1500);
 }
@@ -622,7 +644,7 @@ static void picovave_enter_uboot(const char *why)
     fm1_audio_stop();
     if (panel_up) {                           /* the rescue runs headless: the panel may not be up */
         hg_clear(HG_BLACK);
-        hg_text_center(110, why, 2, HG_GREEN);
+        hg_text_center(56, why, 1, HG_GREEN);
         pv_blit();
     }
     fm1_delay_ms(20);

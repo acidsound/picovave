@@ -1,18 +1,24 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* picovave_gfx.h - pure 240x240 RGB565 canvas and text rendering.
+/* picovave_gfx.h - the screen drawing core: PICO-8's own 128x128, native RGB565.
  *
- * Shared by the firmware (src/picovave.c) and the host preview (host/preview.c), so the
- * pixels the preview writes to a PNG are byte for byte the pixels the panel receives.
- * No hardware access here: the canvas is plain memory.
+ * Shared by the firmware (src/picovave.c) and the host preview (host/preview.c), so the pixels
+ * the preview writes to a PPM are the pixels the panel receives. No hardware access here: the
+ * canvas is plain memory - and it is the SAME surface the engine renders a cart into
+ * (femto8/seam/gdi.h, GDI_W x GDI_H). The firmware aliases hg_fb onto it, so the boot, crash,
+ * update and rescue screens cost no RAM of their own, and the 128->240 scale is the display
+ * seam's (gdi_expand_row): one path for a cart frame and for a fault report.
  *
- * The ST7789-class panel on the SMK-37 Pro takes 16-bit RGB565 big endian, so every
- * pixel is stored byte swapped (the same convention as the Makkuro37 board layer). */
+ * That is why this is not a 240x240 canvas any more: 32,768 B of .bss instead of 115,200, and
+ * app.ld puts .pool right behind .bss, so those bytes are Lua heap (docs/HANDOVER.md 12) - the
+ * difference between a 13 KB cart and a 45 KB one. Text draws in 128x128 terms; the seam's
+ * x1.875 scale is what puts it on the panel, which keeps the 5x7 font readable in a photo. */
 #pragma once
 #include <stdint.h>
+#include "gdi.h"                 /* GDI_W/GDI_H: the surface femto8 renders a cart into */
 #include "picovave_input.h"      /* the input counts are part of the debug screen's shape */
 
-#define HG_W 240
-#define HG_H 240
+#define HG_W GDI_W
+#define HG_H GDI_H
 
 #define HG_RGB(r, g, b) ((uint16_t)(((((uint16_t)(r)) & 0xF8u) << 8) | \
                                     ((((uint16_t)(g)) & 0xFCu) << 3) | \
@@ -22,22 +28,21 @@
 #define HG_GREEN HG_RGB(56, 200, 92)
 #define HG_DIM   HG_RGB(0, 96, 44)
 
-extern uint16_t hg_fb[HG_W * HG_H];      /* firmware: .pool; host: .bss */
+extern uint16_t hg_fb[HG_W * HG_H];      /* firmware: the engine's screen; host: .bss */
 
-static inline uint16_t hg_swap(uint16_t c) { return (uint16_t)((c >> 8) | (c << 8)); }
-
+/* Native RGB565 throughout: the byte order the ST7789 wants is applied by whoever pushes the
+ * panel (src/picovave.c, one row at a time), not here. */
 static void hg_clear(uint16_t c)
 {
     uint32_t i;
-    uint16_t s = hg_swap(c);
     for (i = 0; i < (uint32_t)(HG_W * HG_H); i++)
-        hg_fb[i] = s;
+        hg_fb[i] = c;
 }
 
 static void hg_pixel(int32_t x, int32_t y, uint16_t c)
 {
     if ((uint32_t)x < HG_W && (uint32_t)y < HG_H)
-        hg_fb[(uint32_t)y * HG_W + (uint32_t)x] = hg_swap(c);
+        hg_fb[(uint32_t)y * HG_W + (uint32_t)x] = c;
 }
 
 static void hg_rect(int32_t x, int32_t y, int32_t w, int32_t h, uint16_t c)
@@ -90,12 +95,20 @@ static void hg_text_center(int32_t y, const char *s, uint32_t scale, uint16_t c)
 /* -------------------------------------------------------------- crash screen --- */
 /* The firmware's fatal handler (src/picovave.c, fm1_fault) fills one of these from the crash
  * record and draws it; host/preview.c draws the same function from a scripted record, so the
- * layout has a check that needs no crash. Canvas work only: on the fault path the engine, the
- * allocator and the flash may all be unusable, and this must not touch any of them.
+ * layout has a check that needs no crash (`preview_picovave.py --crash` writes the PPM).
+ * Canvas work only: on the fault path the engine, the allocator and the flash may all be
+ * unusable, and this must not touch any of them.
  *
  * One 8-digit PC is not a diagnosis. The record carries why (vec/emu/dbg), where the stack
  * pointer was (sp, against the stack the linker gave us), how deep the stack really went
- * (stack_used, painted and scanned by the caller) and the hardware trace. All of it fits. */
+ * (stack_used, painted and scanned by the caller) and the hardware trace.
+ *
+ * The canvas is 128x128 and a line is 9 px, so a headline and twelve fields fit - which is what
+ * the old 240x240 screen showed, one field per line now that "USP xxxxxxxx SSP xxxxxxxx" (25
+ * characters, the panel's old width) no longer fits on one. The two WILD values share a line
+ * instead: the sp is a full pointer (it is, by definition, outside both stack windows and could
+ * be anything), the pc only its low 24 bits, which is enough to place it in this image (the XIP
+ * app starts at 0x02000120, .ram_text at 0x01C00000) - and the full value is in fm1_crash. */
 typedef struct {
     uint32_t pc, vec, emu, dbg, sp, rets, etm0, etm1;
     uint32_t stack_lo, stack_top, stack_used;
@@ -120,28 +133,38 @@ static char *hg_put(char *d, const char *s, uint32_t v, uint32_t digits)
     return d;
 }
 
+#define HG_LINE 9                                  /* 7 px glyph + 2 px gap: 12 lines fit */
+
 static void hg_crash_screen(const hg_crash_t *c)
 {
     /* Static on purpose. This is drawn from the fault handler, where the stack is a prime
-     * suspect for the fault in the first place - a 170-byte local array there is how a crash
-     * screen silently fails to appear and leaves the panel showing whatever was on it before.
+     * suspect for the fault in the first place - a local array there is how a crash screen
+     * silently fails to appear and leaves the panel showing whatever was on it before.
      * Single-threaded, interrupts off: nothing else can be drawing. */
     static char l[6][28];
     char *p;
+    int32_t y = 0;
 
     hg_clear(HG_BLACK);
     /* The fault screen and the report the next boot draws are the same picture, so the headline
      * says which one is on the panel: nobody should read a boot-time report as "it just died". */
-    hg_text_center(28, c->boot_report ? "LAST CRASH (BOOT)" : "PICOVAVE CRASH", 2, HG_GREEN);
+    hg_text_center(y, c->boot_report ? "LAST CRASH" : "CRASH", 2, HG_GREEN);
+    y += 16;
 
     p = hg_put(l[0], "PC ", c->pc, 8);
     *p = 0;
-    hg_text_center(50, l[0], 2, HG_WHITE);
+    hg_text_center(y, l[0], 1, HG_WHITE);
+    y += HG_LINE;
 
+    /* "V01 EMU0008 DBG0000": 19 characters, because the canvas is 128 px and hg_text_center()
+     * clips silently - a 21-character line reaches x=1..125, which the panel shows 1 px from its
+     * left bezel (verify_final.py measures every line's ink and wants 4 px of margin). */
     p = hg_put(l[1], "V", c->vec, 2);
-    p = hg_put(p, " EMU ", c->emu, 4);
-    p = hg_put(p, " DBG ", c->dbg, 4);
+    p = hg_put(p, " EMU", c->emu, 4);
+    p = hg_put(p, " DBG", c->dbg, 4);
     *p = 0;
+    hg_text_center(y, l[1], 1, HG_DIM);
+    y += HG_LINE;
 
     /* The stack grows down from stack_top, so a pointer under stack_lo is the overflow the
      * write bands exist to catch - and that is what tells a deep cart apart from an sp that
@@ -158,234 +181,70 @@ static void hg_crash_screen(const hg_crash_t *c)
     else
         p = hg_put(p, " OK", 0, 0);
     *p = 0;
+    hg_text_center(y, l[2], 1, c->sp < c->stack_lo || c->sp > c->stack_top ? HG_WHITE : HG_DIM);
+    y += HG_LINE;
 
     /* The frame's other two stack slots, printed raw: on this silicon they hold values that look
      * like data rather than stack, which is exactly what a photographer needs to see. */
-    p = hg_put(l[3], "USP ", c->usp, 8);
-    p = hg_put(p, " SSP ", c->ssp, 8);
-    *p = 0;
-
-    /* The deepest stack address the app has ever reached, sampled in the 10 kHz ISR: unlike the
-     * frame's sp (the handler's own) this says which stack the main loop runs on and how deep. */
-    p = hg_put(l[4], "DEEP ", c->sp_min, 8);
+    p = hg_put(l[3], "DEEP ", c->sp_min, 8);
     *p++ = ' ';
     *p++ = c->sp_min_tag;
     *p = 0;
+    /* Unlike the frame's sp (the handler's own) this says which stack the main loop runs on, and
+     * how deep it really went: sampled in the 10 kHz ISR, painted and scanned by the caller. */
+    hg_text_center(y, l[3], 1, c->sp_min < c->stack_lo ? HG_WHITE : HG_DIM);
+    y += HG_LINE;
+
+    /* The frame's other two stack slots, printed raw: on this silicon they hold values that look
+     * like data rather than stack, which is exactly what a photographer needs to see. */
+    p = hg_put(l[4], "USP ", c->usp, 8);
+    *p = 0;
+    hg_text_center(y, l[4], 1, HG_DIM);
+    y += HG_LINE;
+
+    p = hg_put(l[5], "SSP ", c->ssp, 8);
+    *p = 0;
+    hg_text_center(y, l[5], 1, HG_DIM);
+    y += HG_LINE;
+
+    p = hg_put(l[0], "RET ", c->rets, 8);
+    *p = 0;
+    hg_text_center(y, l[0], 1, HG_DIM);
+    y += HG_LINE;
+
+    p = hg_put(l[1], "ETM0 ", c->etm0, 8);
+    *p = 0;
+    hg_text_center(y, l[1], 1, HG_DIM);
+    y += HG_LINE;
+
+    p = hg_put(l[2], "ETM1 ", c->etm1, 8);
+    *p = 0;
+    hg_text_center(y, l[2], 1, HG_DIM);
+    y += HG_LINE;
 
     p = hg_put(l[0], "N", c->count, 1);
     p = hg_put(p, " EARLY", c->early, 1);
     p = hg_put(p, " UP", c->uptime_ms, 6);
     p = hg_put(p, "MS", 0, 0);
     *p = 0;
+    hg_text_center(y, l[0], 1, HG_DIM);
+    y += HG_LINE;
 
-    hg_text_center(76, l[1], 1, HG_DIM);
-    hg_text_center(94, l[2], 1, c->sp < c->stack_lo || c->sp > c->stack_top ? HG_WHITE : HG_DIM);
-    hg_text_center(112, l[3], 1, HG_DIM);
-    hg_text_center(130, l[4], 1, c->sp_min < c->stack_lo ? HG_WHITE : HG_DIM);
-    hg_text_center(148, l[0], 1, HG_DIM);
-    p = hg_put(l[1], "RET ", c->rets, 8);
-    p = hg_put(p, " ETM ", c->etm0, 8);
-    *p = 0;
-    hg_text_center(166, l[1], 1, HG_DIM);
-    p = hg_put(l[0], "ETM ", c->etm1, 8);          /* the second trace entry, on its own line */
-    *p = 0;
-    hg_text_center(184, l[0], 1, HG_DIM);
-
-#ifndef PV_BUILD_TAG
-#define PV_BUILD_TAG "no-tag"
-#endif
-    /* Which build drew this, in every photograph of it: "the same screen again" is otherwise
-     * impossible to tell from "the new image never ran" (the LCD keeps its last frame). */
     /* The tick whose interrupted code was on neither stack, with the pc it was interrupted at.
      * Nothing legitimate runs with sp outside both windows, so a non-zero value here is a real
      * find: a longjmp() into a dead frame, or setjmp()'s own scratch sp caught mid-prologue. */
-    p = hg_put(l[5], "WILD ", c->sp_bad, 8);
-    p = hg_put(p, " ", c->sp_bad_pc, 8);
+    p = hg_put(l[4], "WILD ", c->sp_bad, 8);
+    p = hg_put(p, "/", c->sp_bad_pc & 0xFFFFFFu, 6);
     *p = 0;
-    hg_text_center(222, l[5], 1, c->sp_bad ? HG_WHITE : HG_DIM);
+    hg_text_center(y, l[4], 1, c->sp_bad ? HG_WHITE : HG_DIM);
+    y += HG_LINE;
 
-    hg_text_center(204, "BUILD " PV_BUILD_TAG, 1, HG_GREEN);
+    /* Which build drew this, in every photograph of it: "the same screen again" is otherwise
+     * impossible to tell from "the new image never ran" (the LCD keeps its last frame). */
+#ifndef PV_BUILD_TAG
+#define PV_BUILD_TAG "no-tag"
+#endif
+    hg_text_center(y, "BUILD " PV_BUILD_TAG, 1, HG_GREEN);
 }
 
-/* --------------------------------------------------------- input debug screen --- */
-/* The app watches the shared input model and hands the drawing core a plain view. This
- * module owns every pixel of the debug screen, so the ROM and the simulator - which
- * compile the same header - draw it identically. */
-
-#define HG_INPUT_HIST 4u
-
-typedef struct {
-    uint8_t  kind;                 /* 1 = button, 2 = key, 3 = encoder, 4 = pad, 5 = fader, 6 = wheel */
-    uint8_t  id;                   /* button 0..17 / key 0..36 / encoder 0..7 / pad 0..15 / fader 0..3 / wheel 0..1 */
-    int16_t  val;                  /* button/key: 1 = down, 0 = up; encoder: detents; pad: velocity (0 = release);
-                                    * fader: 0..127; wheel: raw 0..1023 */
-} hg_input_ev;
-
-typedef struct {
-    uint32_t events;                       /* total input events seen */
-    uint32_t btn_events, key_events, enc_events, pad_events;
-    uint32_t btn_held;                     /* bit i = button i held */
-    uint64_t key_held;                     /* bit k = key k held */
-    uint16_t pad_held;                     /* bit p = pad p held */
-    const uint8_t *pad_vel;                /* velocity of each pad (HIN_NPAD) */
-    const uint8_t *fader;                  /* 4 faders, 0..127 */
-    const uint16_t *wheel;                 /* 2 wheels, raw */
-    int32_t note;                          /* sounding keybed note as a MIDI number, -1 = silent */
-    const int32_t *enc_pos;                /* 8 accumulated encoder positions */
-    const hg_input_ev *hist;               /* newest first */
-    uint32_t hist_n;                       /* valid entries in hist (<= HG_INPUT_HIST) */
-} hg_input_view;
-
-/* "BTN 05 DOWN" / "KEY 12 UP" / "ENC 03 +2" / "PAD 05 V110" / "FDR 2 064" / "WHL 0 0540";
- * a null event reads "READY" */
-static void hg__ev_text(char *s, const hg_input_ev *e)
-{
-    uint32_t n = 0;
-    const char *t;
-    if (!e) {
-        t = "READY";
-        while (*t) s[n++] = *t++;
-        s[n] = 0;
-        return;
-    }
-    switch (e->kind) {
-    case 2u: t = "KEY "; break;
-    case 3u: t = "ENC "; break;
-    case 4u: t = "PAD "; break;
-    case 5u: t = "FDR "; break;
-    case 6u: t = "WHL "; break;
-    default: t = "BTN "; break;
-    }
-    while (*t) s[n++] = *t++;
-    if (e->kind == 5u || e->kind == 6u) {                 /* one index digit for the 4 faders / 2 wheels */
-        s[n++] = (char)('0' + e->id % 10u);
-    } else {
-        s[n++] = (char)('0' + (e->id / 10u) % 10u);
-        s[n++] = (char)('0' + e->id % 10u);
-    }
-    s[n++] = ' ';
-    if (e->kind == 3u) {
-        int32_t a = e->val;
-        s[n++] = (char)(a < 0 ? '-' : '+');
-        if (a < 0) a = -a;
-        if (a > 99) a = 99;
-        s[n++] = (char)('0' + (a / 10) % 10);
-        s[n++] = (char)('0' + a % 10);
-    } else if (e->kind == 4u) {                           /* pad: velocity, or REL */
-        if (e->val) {
-            int32_t v = e->val;
-            s[n++] = 'V';
-            s[n++] = (char)('0' + (v / 100) % 10);
-            s[n++] = (char)('0' + (v / 10) % 10);
-            s[n++] = (char)('0' + v % 10);
-        } else {
-            t = "REL";
-            while (*t) s[n++] = *t++;
-        }
-    } else if (e->kind == 5u) {                           /* fader: 0..127 */
-        int32_t v = e->val;
-        s[n++] = (char)('0' + (v / 100) % 10);
-        s[n++] = (char)('0' + (v / 10) % 10);
-        s[n++] = (char)('0' + v % 10);
-    } else if (e->kind == 6u) {                           /* wheel: raw 0..1023 */
-        int32_t v = e->val;
-        s[n++] = (char)('0' + (v / 1000) % 10);
-        s[n++] = (char)('0' + (v / 100) % 10);
-        s[n++] = (char)('0' + (v / 10) % 10);
-        s[n++] = (char)('0' + v % 10);
-    } else {
-        t = e->val ? "DOWN" : "UP";
-        while (*t) s[n++] = *t++;
-    }
-    s[n] = 0;
-}
-
-static void hg__mark(int32_t x, int32_t y, int32_t w, int32_t h, int on)
-{
-    hg_rect(x, y, w, h, on ? HG_GREEN : HG_DIM);
-}
-
-static void hg__fmt(char *d, uint32_t v, uint32_t w)         /* w digits, leading zeros */
-{
-    while (w) { d[w - 1u] = (char)('0' + v % 10u); v /= 10u; w--; }
-}
-
-/* The one screen this firmware draws: what the inputs - digital and analog - are doing now. */
-static void hg_render_input(const hg_input_view *v)
-{
-    char s[32];
-    const hg_input_ev *last = v->hist_n ? &v->hist[0] : 0;
-    uint32_t i;
-
-    hg_clear(HG_BLACK);
-    hg_text_center(4, "INPUT TEST", 2, HG_GREEN);
-
-    hg__ev_text(s, last);
-    hg_text_center(22, s, 2, last ? HG_WHITE : HG_DIM);          /* the latest event, large */
-
-    s[0] = 'B'; hg__fmt(s + 1, v->btn_events, 4);                /* per-kind event totals */
-    s[5] = 'K'; hg__fmt(s + 6, v->key_events, 4);
-    s[10] = 'E'; hg__fmt(s + 11, v->enc_events, 4);
-    s[15] = 'P'; hg__fmt(s + 16, v->pad_events, 4);
-    s[20] = 0;
-    hg_text_center(40, s, 1, HG_DIM);
-
-    if (v->note >= 0) {                                          /* the note the square wave plays */
-        s[0] = 'N'; s[1] = 'O'; s[2] = 'T'; s[3] = 'E'; s[4] = ' ';
-        hg__fmt(s + 5, (uint32_t)v->note, 2);
-        s[7] = 0;
-        hg_text(HG_W - 6 - (int32_t)hg_text_w(s, 1), 40, s, 1, HG_GREEN);
-    }
-
-    hg_text(6, 52, "BTN", 1, HG_DIM);                            /* 18 buttons, two rows of nine */
-    for (i = 0; i < HIN_NBTN; i++)
-        hg__mark(30 + (int32_t)(i % 9u) * 23, 50 + (int32_t)(i / 9u) * 13, 20, 10,
-                 (int)((v->btn_held >> i) & 1u));
-
-    hg_text(6, 84, "KEY", 1, HG_DIM);                           /* 37 keys, two rows (19 + 18) */
-    for (i = 0; i < HIN_NKEY; i++)
-        hg__mark(7 + (int32_t)(i % 19u) * 12, 92 + (int32_t)(i / 19u) * 13, 10, 11,
-                 (int)((v->key_held >> i) & 1u));
-
-    hg_text(6, 120, "PAD", 1, HG_DIM);                          /* 16 pads, one row */
-    for (i = 0; i < HIN_NPAD; i++)
-        hg__mark(30 + (int32_t)i * 13, 118, 11, 11, (int)((v->pad_held >> i) & 1u));
-
-    s[0] = 'F'; s[1] = ' ';                                      /* 4 faders, 0..127 */
-    for (i = 0; i < HIN_NFADER; i++) {
-        hg__fmt(s + 2 + i * 4, v->fader[i], 3);
-        s[2 + i * 4 + 3] = ' ';
-    }
-    s[18] = 0;
-    hg_text(6, 134, s, 1, HG_DIM);
-
-    s[0] = 'W'; s[1] = ' ';                                      /* 2 wheels, raw */
-    hg__fmt(s + 2, v->wheel[0], 4);
-    s[6] = ' ';
-    hg__fmt(s + 7, v->wheel[1], 4);
-    s[11] = 0;
-    hg_text(6, 144, s, 1, HG_DIM);
-
-    hg_text(6, 158, "LOG", 1, HG_DIM);                          /* the event log, newest first */
-    for (i = 0; i < v->hist_n && i < HG_INPUT_HIST; i++) {
-        hg__ev_text(s, &v->hist[i]);
-        hg_text(30, 158 + (int32_t)i * 11, s, 1, i ? HG_DIM : HG_WHITE);
-    }
-    if (!v->hist_n)
-        hg_text(30, 158, "NO INPUT YET", 1, HG_DIM);
-
-    hg_text(6, 206, "ENC", 1, HG_DIM);                          /* eight encoder positions */
-    for (i = 0; i < HIN_NENC; i++) {
-        char t[4];
-        int32_t p = v->enc_pos[i];
-        int32_t x = 34 + (int32_t)i * 25;
-        hg_rect(x, 204, 22, 14, HG_DIM);
-        if (p < 0) p = -p;
-        if (p > 99) p = 99;
-        hg__fmt(t, (uint32_t)p, 2);
-        t[2] = 0;
-        hg_text(x + 3, 208, t, 1, HG_WHITE);
-    }
-
-    hg_text_center(226, "SMK-37 PRO 240X240", 1, HG_DIM);
-}
+#undef HG_LINE

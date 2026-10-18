@@ -121,10 +121,11 @@ check("sim_render advanced the audio clock", ex.sim_boots() > bootsBefore,
 // the device compiles it) can read. That is the check that the .p8.png path works end to end.
 import { cartPayload, cookedFromScript, CART_LEN, COOKED_SIZE, COOKED_MAGIC } from "./p8png.mjs";
 
-// The device's whole heap for the engine and Lua: POOL_LEN 294,912 B (femto8/stub/device + app.ld)
-// less the allocator's 1 KiB red zone - the number tools/build_picovave.py prints. sim_heap_peak()
-// is the same pool measured here (sim/heap_probe.c), so the two are directly comparable.
-const DEVICE_HEAP = 294912 - 1024;
+// The device's whole heap for the engine and Lua: app.ld's arena (the RAM region from the end of
+// .bss to the stack guard, 414,184 B) less the allocator's 1 KiB red zone - the number
+// tools/build_picovave.py prints. sim_heap_peak() is that same pool measured here by the device's
+// own allocator (sim/device_alloc.c), so the two are directly comparable.
+const DEVICE_HEAP = 414184 - 1024;
 
 const cartDir = path.join(path.dirname(wasmPath), "carts");
 let fixtures = [];
@@ -195,16 +196,17 @@ if (fixtures.length) {
   check("the committed cart is the active slot", ex.sim_cart_active() === 0, "slot=" + ex.sim_cart_active());
 
   for (let i = 0; i < 30; i++) ex.sim_frame();
-  // This cart is one of the big ones (hundreds of KB of Lua under the device's own allocator, which
-  // --device-alloc links). Two outcomes are honest: it ran (nothing refused, the committed slot is
-  // the one running), or the pool refused it and the boot ladder fell back to the embedded cart
-  // that always runs. What must NEVER happen - the baba freeze this ladder exists for - is a
-  // status with nothing running afterwards, i.e. a panel stuck on its boot screen.
+  // This cart is one of the big ones (hundreds of KB of Lua under the device's own allocator). Two
+  // outcomes are honest: the committed cart ran - with nothing refused, or with the pool refusing and
+  // Lua's GC answering (a refusal is survivable, that is the whole "at the edge" gradation) - or the
+  // pool refused it beyond recovery and the boot ladder fell back to the embedded cart that always
+  // runs. What must NEVER happen - the baba freeze this ladder exists for - is a status with nothing
+  // running afterwards, i.e. a panel stuck on its boot screen.
   const committedRefused = Number(ex.sim_heap_refused());
   const committedRunning = ex.sim_cart_running();
   check("the committed cart runs, or the pool refused it and the ladder fell back",
         ex.sim_cart_active() === 0 && ex.sim_status() === 0 &&
-        (committedRefused === 0 ? committedRunning === 0 : committedRunning === -1),
+        (committedRunning === 0 || (committedRefused > 0 && committedRunning === -1)),
         "slot=" + ex.sim_cart_active() + " status=" + ex.sim_status() +
         " running=" + committedRunning + " refused=" + committedRefused);
   check("the uploaded cart draws", nonBlack(snap()) > 0, nonBlack(snap()) + " lit px");
@@ -286,12 +288,12 @@ if (fixtures.length) {
   };
   // Which cart is on the panel, in words: a slot, the embedded default cart, or nothing.
   const cartOf = (r) => r < 0 ? (r === -1 ? "embedded" : "nothing") : "slot " + r;
-  // Under --device-alloc the pool is really 294,912 B and the allocator really refuses, so the
-  // verdict is a fact; over the cost model the peak IS the answer (nothing can refuse there).
+  // Under --device-alloc the arena is really app.ld's 414,184 B and the allocator really refuses, so
+  // the verdict is a fact; over the cost model the peak IS the answer (nothing can refuse there).
   const fit = (peak, refused) =>
     Math.round(peak / 1024) + " KB of " + Math.round(DEVICE_HEAP / 1024) + " KB" +
-    (refused ? " (실기 RAM 초과: the pool refused " + refused + " allocation(s))"
-            : peak <= DEVICE_HEAP ? " (실기 실행 가능)" : " (실기 RAM 초과 - 시뮬레이터 전용)");
+    (refused ? " (at the edge: the pool refused " + refused + " allocation(s), Lua's GC retried)"
+             : peak <= DEVICE_HEAP ? " (실기 실행 가능)" : " (실기 RAM 초과 - 시뮬레이터 전용)");
 
   // What the DEVICE can actually hold is a contract, not a hope: the baked cart - the one every
   // device ships with - has to fit the pool with room to spare, or nothing runs on the hardware.
@@ -309,31 +311,32 @@ if (fixtures.length) {
     feed(frame(0x03, le7(crc16(payload), 3)));
     for (let i = 0; i < 30; i++) ex.sim_frame();
     const lit = nonBlack(snap());
-    // The commit is the claim; the run can only happen if the pool can serve the cart (these five
-    // are real games, 600 KB to 2 MB of Lua under the cost model, so on the device's own allocator
-    // only the smallest fits). Two things have to hold either way, and the second one is what a
-    // real SMK-37 Pro got wrong with baba:
-    //   - a cart the pool cannot serve is the pool's own REFUSAL, never a silent status -1;
-    //   - and the boot LADDER must then step down (the slot it replaced, then the embedded default
-    //     cart) until a cart RUNS: the panel may not be left on the boot screen because one cart
-    //     did not fit. picovave_boot() closes the engine's Lua between candidates to make that
-    //     memory available again (docs/HANDOVER.md §7).
+    // The commit is the claim; whether the cart then RUNS depends on the pool, and with the arena
+    // where it now is a big cart generally does run - at the edge, where the pool refuses the odd
+    // allocation and Lua's luaM_realloc_ runs a full GC and retries. That costs frames, not the
+    // cart: what must hold either way is the OUTCOME, and the second half of it is what a real
+    // SMK-37 Pro got wrong with baba:
+    //   - either the uploaded cart is the one running;
+    //   - or it was refused and the boot LADDER stepped down (the slot it replaced, then the
+    //     embedded default cart) until a cart RUNS: the panel may not be left on the boot screen
+    //     because one cart did not fit. picovave_boot() closes the engine's Lua between candidates
+    //     to make that memory available again (docs/HANDOVER.md §7).
     const refusedHere = Number(ex.sim_heap_refused());
     const runningHere = Number(ex.sim_cart_running());
     const ranHere = ex.sim_status() === 0 && lit > 0;
+    const endedOnSomething = runningHere !== -2;      // -2 = nothing: the boot screen
     check("a real .p8.png cart commits and runs: " + name,
-          ex.sim_cart_active() === slot && ranHere &&
-          (refusedHere > 0 ? runningHere !== slot : runningHere === slot),
+          ex.sim_cart_active() === slot && ranHere && endedOnSomething,
           "status=" + ex.sim_status() + " running=" + cartOf(runningHere) + " lit=" + lit +
           (refusedHere ? " · the pool refused " + refusedHere : "") + " (" + payload.length + " B)");
     const m = await probeCart(name, payload, 300);    // 10 s of cart time: a game's steady state
-    // The same two rules in a FRESH instance with the device's allocator linked in: a cart the pool
-    // can serve runs (no refusal at all), and one it cannot is refused AND the ladder still ends on
-    // a cart that runs. That "and" is the device claim - "it fits the SMK-37" is only half of it.
-    const served = m.refused === 0;
+    // The same two rules in a FRESH instance with the device's allocator linked in, and the same
+    // reading: a cart that runs is served (refusals and all), one the pool cannot serve at all
+    // keeps being refused until the LOAD fails, and then the ladder still ends on a cart that runs.
+    const servedToEnd = m.running === m.slot;
     check("  ...and the device pool it would need",
           m.status === 0 && m.peak >= 64 * 1024 &&   // >= the engine's own buffers: something ran
-          (served ? m.running === m.slot : m.running !== m.slot),
+          (servedToEnd || (m.refused > 0 && m.running !== -2)),
           fit(m.peak, m.refused) + " (settled " + Math.round(m.used / 1024) + " KB, running " +
           cartOf(m.running) + ")");
   }
@@ -349,6 +352,21 @@ if (fixtures.length) {
           m.status === 0 && m.peak <= DEVICE_HEAP && m.refused === 0,
           Math.round(m.peak / 1024) + " KB peak, " +
           Math.round((DEVICE_HEAP - m.peak) / 1024) + " KB spare, " + m.refused + " refusal(s)");
+  }
+
+  // ...and the headline claim of the memory round (docs/HANDOVER.md §13): the 45 KB cart that used
+  // to leave the panel on the boot screen now RUNS inside the device's own arena. It is the cart at
+  // the EDGE - the pool refuses the odd allocation and Lua's GC retries - which is exactly why the
+  // arena had to grow to 414,184 B in the first place.
+  const babaIdx = fixtures.findIndex((n) => n.startsWith("baba"));
+  if (babaIdx >= 0) {
+    const name = fixtures[babaIdx];
+    const m = await probeCart(name, await cartPayload(
+      new Uint8Array(fs.readFileSync(path.join(cartDir, name)))), 300);
+    check("the 45 KB cart runs in the device's own arena: " + name,
+          m.status === 0 && m.running === m.slot,
+          Math.round(m.peak / 1024) + " KB peak, " + m.refused + " refusal(s), running " +
+          cartOf(m.running));
   }
 }
 

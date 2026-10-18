@@ -105,11 +105,30 @@ these do not surface there.
    Together the engine's footprint for the whole time a cart runs drops from 156,416 B to 73,728 B
    (PICO-8's 64 KiB address space + the overlay screen + the small fixed buffers), i.e. the Lua heap
    grows by 82,688 B.
-   Measured, not assumed: the wasm reports the pool every cart needs (`sim/heap_probe.c`, which
-   charges the device allocator's own 16 B per block), and that is what the page's "will this fit
-   the device?" answer and `sim_test.mjs` use - of 293,888 B, the baked cart peaks at 108 KB and
-   `flipside` at 204 KB, while `baba_demake-9` needs 622 KB.
+   Measured, not assumed: the wasm runs the cart on the device's own allocator inside the device's
+   own arena (`femto8/stub/device/alloc.c`, through `sim/device_alloc.c` - the default
+   `tools/build_sim.py` flavor) and reports the pool's high-water mark and how many allocations it
+   refused (`sim_heap_peak()`/`sim_heap_refused()`) - which is what the page's "will this fit the
+   device?" answer, `sim_test.mjs` and `tools/probe_carts.mjs` all read. Of the 413,160 B the
+   device's Lua actually gets, the baked cart peaks at 108 KB and `flipside` at 204 KB; a 45 KB
+   script like `baba_demake-9` needs a pool of about 400 KB, which is what `docs/HANDOVER.md` 13
+   is about.
 9. `src/p8_lua.c` `reload(name)`: **refuses** instead of parsing into the buffers patch 5 leaves
    NULL (`parse_cart_file()` with a NULL destination would fault). Same shape as `cstore()`'s
    existing refusal: `reload(dest, src, len)` without a name still restores from the cart ROM,
    which is what carts actually call.
+10. `src/p8_emu.c` `p8_render()` (**the `__DA1470x__` branch**): the cart's screen goes into the
+    seam's own 128x128 GDI surface, 1:1 - PICO-8's screen size - and not into a 240x240 panel
+    framebuffer. Upstream's device branch scaled here, with a hand-unrolled 15-destination-pixels-
+    per-8-source nearest scaler; that scale is `gdi_expand_row()` (`seam/gdi.h`) now, applied one
+    destination row at a time by whoever pushes a panel (the board blits a row into the ST7789, the
+    wasm and the host preview expand into their own capture). Two things follow: the app's static
+    screen drops from 115,200 B to 32,768 B, and `app.ld` puts `.pool` right behind `.bss`, so all
+    82,432 B are Lua heap (`docs/HANDOVER.md` 12) - the difference between a 13 KB cart and a 45 KB
+    one; and a whole panel frame never exists in RAM on the device.
+    The same rewrite makes the device branch draw what the **SDL** branch draws: the screen
+    transform at 0x5f2c (`screen_transform_pixel()`) and high-colour mode
+    (`high_color_resolve()`) are applied, where upstream's device branch ignored both. Those two
+    helpers **moved out of the `#ifdef SDL` block** - nothing in them is SDL-specific, they only
+    read `m_memory` - so all three consumers (device, wasm simulator, host preview) render a cart
+    identically; that is what `tools/verify_final.py`'s pixel parity compares.

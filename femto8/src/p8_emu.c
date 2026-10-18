@@ -104,8 +104,8 @@ static bool cart_running = false;
 static bool lua_running = false;
 static bool quit_requested = false;
 
-char m_current_cart_dir[PATH_MAX];
-char m_current_cart_file_name[PATH_MAX];
+char m_current_cart_dir[PV_CART_PATH_MAX];
+char m_current_cart_file_name[PV_CART_PATH_MAX];
 char m_breadcrumb[256];
 char m_param_string[256];
 char m_clipboard[1024];
@@ -365,24 +365,49 @@ int p8_load_cooked(const uint8_t *cooked, uint32_t size)
 /* Expand the cooked cart's code section into m_lua_script, allocated here and released by
  * p8_release_script() once lua_init_script() has it. Both p8_load_cooked() (a new cart) and
  * p8_begin() (a cart's reset() re-entering the harness) go through this, so nothing has to keep
- * the 64 KiB text around while the cart runs. */
+ * the 64 KiB text around while the cart runs.
+ *
+ * picovave: the buffer is sized to the CART's own script, not to the 64 KiB maximum. The code
+ * section is compressed and both formats carry the uncompressed length in their header, so the
+ * maximum is only ever needed by a cart that really has 64 KiB of Lua - and holding it for every
+ * cart spent up to 57,267 B of the pool at the exact moment the pool is tightest (the compile).
+ * Measured (build/probe_carts.mjs): flipside_-1 8,268 B of script, loop-4 12,089, terra 40,944. */
 static int p8_materialize_script(void)
 {
+    const uint8_t *src;
+    int script_size;
+
     if (m_lua_script)
         return 0;
 
     if (!m_cooked || m_cooked_size != (uint32_t)COOKED_SIZE)
         return -1;                         /* nothing loaded */
 
-    m_lua_script = (char *)malloc(LUA_SCRIPT_SIZE);
+    /* The raw length lives in the 4-byte format tag + 2-byte big-endian length that both
+     * compressed forms start with (lexaloffle/pxa_compress_snippets.c, p8_compress.c); a legacy
+     * raw section is exactly CODE_RAW_MAX bytes of text. */
+    src = (const uint8_t *)m_cooked + CART_MEMORY_SIZE;
+    if (src[0] == ':' && src[1] == 'c' && src[2] == ':' && src[3] == 0)
+        script_size = src[4] * 256 + src[5];            /* late PICO-8 ':c:' mini */
+    else if (src[0] == 0 && src[1] == 'p' && src[2] == 'x' && src[3] == 'a')
+        script_size = src[4] * 256 + src[5];            /* PXA */
+    else
+        script_size = 0x3d00;                           /* pre-0.1.7 raw text */
+    if (script_size <= 0 || script_size > LUA_SCRIPT_SIZE - 1)
+        script_size = LUA_SCRIPT_SIZE - 1;              /* corrupt header: fall back to the max */
+
+    m_lua_script = (char *)malloc((size_t)script_size + 1);
     if (!m_lua_script)
         return -1;                         /* the Lua heap is empty right now (p8_reset_cart
                                             * closed the previous state), so this can only fail
-                                            * if the cart's own 64 KiB does not fit - which no
+                                            * if the cart's own script does not fit - which no
                                             * cart that could run would hit */
 
     pico8_code_section_decompress((uint8_t *)m_cooked + CART_MEMORY_SIZE,
-                                  (uint8_t *)m_lua_script, LUA_SCRIPT_SIZE - 1);
+                                  (uint8_t *)m_lua_script, script_size);
+    m_lua_script[script_size] = '\0';      /* the decompressors terminate, but lua_init_script()'s
+                                            * strnlen(script, LUA_SCRIPT_SIZE) must never run off
+                                            * the end of a buffer this size */
     return 0;
 }
 
@@ -571,7 +596,11 @@ int p8_shutdown()
     return 0;
 }
 
-#ifdef SDL
+
+/* picovave: screen_transform_pixel() and high_color_resolve() used to live inside the SDL
+ * branch below. The __DA1470x__ branch (the board, the wasm simulator and the host preview -
+ * all three compile it) renders the same cart pixels, so both helpers are needed on both
+ * sides of the #ifdef: nothing in them is SDL-specific, they only read m_memory. */
 // Map output pixel (ox, oy) to source framebuffer pixel (sx, sy) based on
 // the screen transform mode at 0x5f2c.
 static void screen_transform_pixel(uint8_t mode, int ox, int oy, int *sx, int *sy)
@@ -660,6 +689,7 @@ static uint8_t high_color_resolve(uint8_t hc_mode, uint8_t pix_index, int sx, in
     return color_get(PALTYPE_SCREEN, pix_index);
 }
 
+#ifdef SDL
 void p8_render()
 {
     sprintf(m_str_buffer, "%d", (int)m_actual_fps);
@@ -734,213 +764,77 @@ void p8_render()
     sprintf(m_str_buffer, "%d", (int)m_actual_fps);
     draw_text(m_str_buffer, strlen(m_str_buffer), 0, 0, 1, 0, false, NULL, NULL, NULL);
 
+    /* picovave: PICO-8's screen, 1:1 into the seam's GDI_W x GDI_H surface (femto8/seam/gdi.h).
+     * The 128->240 scale is the SEAM's now, which is what lets the board blit one row at a time
+     * and never hold a panel frame in RAM: the 240-wide scaler that used to live here needed a
+     * 240x240 buffer, 82,432 B of .bss that the Lua heap gets instead (docs/HANDOVER.md 12).
+     * The pixel rule is the SDL path's - screen transform (0x5f2c) and high-colour mode, both
+     * identity for a cart that does not touch them - so this file's three consumers (the board,
+     * the wasm simulator, the host preview) agree on what a cart draws. */
     uint16_t *output = gdi_get_frame_buffer_addr(HW_LCDC_LAYER_0);
-    uint8_t *screen_mem = &m_memory[(m_memory[MEMORY_SCREEN_PHYS] << 8)];
-    uint8_t *pal = &m_memory[MEMORY_PALETTES + PALTYPE_SCREEN * 16];
+    uint8_t transform = m_memory[MEMORY_SCREEN_TRANSFORM];
+    uint8_t hc_mode = m_memory[MEMORY_HIGH_COLOUR_MODE];
+    uint32_t screen_base = (uint32_t)m_memory[MEMORY_SCREEN_PHYS] << 8;
 
-    for (int y = 1; y <= 128; y++)
+    for (int y = 0; y < P8_HEIGHT; y++)
     {
-        if (y & 0x7)
+        uint16_t *row = output + (y * P8_WIDTH);
+
+        if (transform == 0)
         {
-            uint16_t *top = output;
-            uint16_t *bottom = output + 240;
+            /* the common case: nothing moved, so a row is 64 bytes and a byte is two pixels,
+             * low nibble first (PICO-8's own screen layout) */
+            const uint8_t *s = &m_memory[screen_base + ((uint32_t)y * 64u)];
 
-            for (int x = 0; x < 128; x += 8)
+            for (int x = 0; x < P8_WIDTH; x += 2)
             {
+                uint8_t value = *s++;
+                uint8_t left = value & 0xF;
+                uint8_t right = value >> 4;
+                uint8_t index_left = hc_mode ? high_color_resolve(hc_mode, left, x, y)
+                                             : color_get(PALTYPE_SCREEN, left);
+                uint8_t index_right = hc_mode ? high_color_resolve(hc_mode, right, x + 1, y)
+                                              : color_get(PALTYPE_SCREEN, right);
 
-                uint8_t left = (*screen_mem) & 0xF;
-                uint8_t right = (*screen_mem) >> 4;
-
-                uint8_t index_left = pal[left];
-                uint8_t index_right = pal[right];   /* picovave: was `color_pal`, which is declared nowhere */
-
-                uint16_t c_left = m_colors[color_index(index_left)];
-                uint16_t c_right = m_colors[color_index(index_right)];
-
-                *top++ = c_left;
-                *top++ = c_left;
-                *top++ = c_right;
-                *top++ = c_right;
-
-                *bottom++ = c_left;
-                *bottom++ = c_left;
-                *bottom++ = c_right;
-                *bottom++ = c_right;
-
-                screen_mem++;
-
-                left = (*screen_mem) & 0xF;
-                right = (*screen_mem) >> 4;
-
-                index_left = pal[left];
-                index_right = pal[right];
-
-                c_left = m_colors[color_index(index_left)];
-                c_right = m_colors[color_index(index_right)];
-
-                *top++ = c_left;
-                *top++ = c_left;
-                *top++ = c_right;
-                *top++ = c_right;
-
-                *bottom++ = c_left;
-                *bottom++ = c_left;
-                *bottom++ = c_right;
-                *bottom++ = c_right;
-
-                screen_mem++;
-
-                left = (*screen_mem) & 0xF;
-                right = (*screen_mem) >> 4;
-
-                index_left = pal[left];
-                index_right = pal[right];
-
-                c_left = m_colors[color_index(index_left)];
-                c_right = m_colors[color_index(index_right)];
-
-                *top++ = c_left;
-                *top++ = c_left;
-                *top++ = c_right;
-                *top++ = c_right;
-
-                *bottom++ = c_left;
-                *bottom++ = c_left;
-                *bottom++ = c_right;
-                *bottom++ = c_right;
-
-                screen_mem++;
-
-                left = (*screen_mem) & 0xF;
-                right = (*screen_mem) >> 4;
-
-                index_left = pal[left];
-                index_right = pal[right];
-
-                c_left = m_colors[color_index(index_left)];
-                c_right = m_colors[color_index(index_right)];
-
-                *top++ = c_left;
-                *top++ = c_left;
-                *top++ = c_right;
-
-                *bottom++ = c_left;
-                *bottom++ = c_right;
-                *bottom++ = c_right;
-
-                screen_mem++;
+                row[x] = m_colors[color_index(index_left)];
+                row[x + 1] = m_colors[color_index(index_right)];
             }
-
-            output += 480;
         }
         else
         {
-            uint16_t *top = output;
-
-            for (int x = 0; x < 128; x += 8)
+            for (int x = 0; x < P8_WIDTH; x++)
             {
+                int sx, sy;
+                uint8_t value, pix, index;
 
-                uint8_t left = (*screen_mem) & 0xF;
-                uint8_t right = (*screen_mem) >> 4;
+                screen_transform_pixel(transform, x, y, &sx, &sy);
+                value = m_memory[screen_base + (uint32_t)(sx >> 1) + ((uint32_t)sy * 64u)];
+                pix = IS_EVEN(sx) ? (value & 0xF) : (value >> 4);
+                index = hc_mode ? high_color_resolve(hc_mode, pix, sx, sy)
+                                : color_get(PALTYPE_SCREEN, pix);
 
-                uint8_t index_left = pal[left];
-                uint8_t index_right = pal[right];
-
-                uint16_t c_left = m_colors[color_index(index_left)];
-                uint16_t c_right = m_colors[color_index(index_right)];
-
-                *top++ = c_left;
-                *top++ = c_left;
-                *top++ = c_right;
-                *top++ = c_right;
-
-                screen_mem++;
-
-                left = (*screen_mem) & 0xF;
-                right = (*screen_mem) >> 4;
-
-                index_left = pal[left];
-                index_right = pal[right];
-
-                c_left = m_colors[color_index(index_left)];
-                c_right = m_colors[color_index(index_right)];
-
-                *top++ = c_left;
-                *top++ = c_left;
-                *top++ = c_right;
-                *top++ = c_right;
-
-                screen_mem++;
-
-                left = (*screen_mem) & 0xF;
-                right = (*screen_mem) >> 4;
-
-                index_left = pal[left];
-                index_right = pal[right];
-
-                c_left = m_colors[color_index(index_left)];
-                c_right = m_colors[color_index(index_right)];
-
-                *top++ = c_left;
-                *top++ = c_left;
-                *top++ = c_right;
-                *top++ = c_right;
-
-                screen_mem++;
-
-                left = (*screen_mem) & 0xF;
-                right = (*screen_mem) >> 4;
-
-                index_left = pal[left];
-                index_right = pal[right];
-
-                c_left = m_colors[color_index(index_left)];
-                c_right = m_colors[color_index(index_right)];
-
-                *top++ = c_left;
-                *top++ = c_left;
-                *top++ = c_right;
-
-                screen_mem++;
+                row[x] = m_colors[color_index(index)];
             }
-
-            output += 240;
         }
     }
 
-    output = gdi_get_frame_buffer_addr(HW_LCDC_LAYER_0);
-
-    for (int y = 1; y <= P8_HEIGHT; y++)
+    /* The overlay layer over it, on the same 128x128 grid: the engine draws its I/O icon here
+     * (p8_show_io_icon) while a cart touches cartdata, and wipes it again after. */
+    for (int y = 0; y < P8_HEIGHT; y++)
     {
-        if (y & 0x7)
+        uint16_t *row = output + (y * P8_WIDTH);
+        const uint8_t *overlay_mem = m_overlay_memory + ((uint32_t)y * 64u);
+
+        for (int x = 0; x < P8_WIDTH; x += 2)
         {
-            uint16_t *top = output;
+            uint8_t value = overlay_mem[x >> 1];
+            uint8_t left = value & 0xF;
+            uint8_t right = value >> 4;
 
-            for (int x = 0; x < 128; x += 2)
-            {
-                int overlay_offset = (x >> 1) + (y - 1) * 64;
-                uint8_t value = m_overlay_memory[overlay_offset];
-                uint8_t left = value & 0xF;
-                uint8_t right = value >> 4;
-
-                if (left != OVERLAY_TRANSPARENT_COLOR)
-                {
-                    uint16_t c_left = m_colors[color_index(left)];
-                    *top = c_left;
-                    *(top + 1) = c_left;
-                }
-                top += 2;
-
-                if (right != OVERLAY_TRANSPARENT_COLOR)
-                {
-                    uint16_t c_right = m_colors[color_index(right)];
-                    *top = c_right;
-                    *(top + 1) = c_right;
-                }
-                top += 2;
-            }
-
-            output += 240;
+            if (left != OVERLAY_TRANSPARENT_COLOR)
+                row[x] = m_colors[color_index(left)];
+            if (right != OVERLAY_TRANSPARENT_COLOR)
+                row[x + 1] = m_colors[color_index(right)];
         }
     }
 

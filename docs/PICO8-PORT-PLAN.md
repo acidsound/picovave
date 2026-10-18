@@ -517,14 +517,22 @@ scripted sequence of presses (the third build of the same code). What that pass 
   boundary-tag allocator over the linker's POOL region (`alloc.c`), because the JieLi `pi32v2`
   newlib has no stdio/malloc; `femto8/seam/seam_device.c` is the device seam.
 - `src/picovave.c` — the device body: the `hh_*` HAL, the panel push (`gdi_display_update_async`,
-  which byte-swaps the engine's native RGB565 into the ST7789's big endian **in place**), the ALNK0
-  ring audio fed by `render_sounds()` from the main loop, and the USB/OTA/cart glue.
+  which expands one PICO-8 screen row to 240 and byte-swaps the engine's native RGB565 into the
+  ST7789's big endian — one row at a time, so no panel-sized frame is ever in RAM — see §13 of
+  `docs/HANDOVER.md`), the ALNK0 ring audio fed by `render_sounds()` from the main loop, and the
+  USB/OTA/cart glue.
 - `host/preview.c` + `host/seam_host.c` — the host consumer, so parity has a third, independent
   build of the same engine and app layer.
-- `platform/firmware/app.ld` — RAM `.data/.bss` 144K and POOL `0x01C2C000`+`0x48000`; everything
-  above the engine arena is the Lua heap. Measured: `.data+.bss` 144,696 B of 147,456,
-  `.pool` in use 0 B, Lua heap 293,888 − 271,872 = **22,016 B**. The flashing simulation
-  (the DEVICE box) is independent of this and was already green.
+- `platform/firmware/app.ld` — ONE RAM region (0x01C08000 .. 0x01C74000 at this measurement; §13
+  moved its start to 0x01C01400): `.data/.bss`, then
+  `.pool` straight behind it, so the arena is `[_pool_start,_pool_top)` = whatever `.bss` leaves..
+  the stack guard. Measured (2026-10-18, §12 of `docs/HANDOVER.md`): `.data+.bss` 137,544 B,
+  arena 304,824 B, `.pool` in use 0 B, Lua heap 303,800 B = arena − 1 KiB red zone − engine.
+  (§13 then shrank the render target to PICO-8's own 128x128 and reclaimed the reserved RAM below
+  `.bss`, so the CURRENT numbers are there, not here.)
+  (It used to be two regions with a hand-set 1,848 B hole at 0x01C2C000, and a hard-coded
+  `POOL_LEN`; both are gone — the build now reads the arena out of the link.) The flashing
+  simulation (the DEVICE box) is independent of this and was already green.
 
 **Buffer sizing — decided and applied.** The save scratch is gone and the big buffers are
 right-sized in `femto8/src/p8_emu.h` (one source of truth, so a cart that exceeds a cap fails the
@@ -642,7 +650,8 @@ which is patch #7. Both bugs are exactly the kind a "one cart per process" test 
 
 **Measured limit — and the reclaim that answered it (2026-10-17).** The format works end to end, but
 the device's memory is the real gate, so it was measured rather than assumed. The pool is 294,912 B
-(minus a 1,024 B red zone) and the engine used to hold **156,416 B** of it for the whole time a cart
+(minus a 1,024 B red zone; 304,824 / 303,800 B on 2026-10-18 §12, **414,184 / 413,160 B after §13**) and
+the engine used to hold **156,416 B** of it for the whole time a cart
 ran: a 64 KiB PICO-8 address space, a **17,152 B copy of the cartridge ROM**, an 8 KiB overlay
 screen, and a **64 KiB Lua source buffer** — plus the Lua state and its ~200 API closures (~44 KB).
 That is 207,744 B before a cart draws a pixel, leaving ~86 KB, which makes the hardware a toy. Two
@@ -660,7 +669,11 @@ of those four buffers did not have to be RAM at all (patches #8/#9 in
   restart still restarts from the cart's own source.
 
 For the whole time a cart runs the engine's share of the pool is now **73,728 B** (64 KiB + 8 KiB);
-a *load* adds the 64 KiB source buffer while it lasts, and that is the whole engine footprint.
+a *load* adds the source buffer while it lasts, and that is the whole engine footprint. Since
+2026-10-18 that buffer is **sized to the cart's own decompressed script** (the compressed code
+section carries its raw length in the header), not to the 64 KiB maximum: a 13 KB cart's script is
+12,089 B, so the load held 53,446 B less of the pool at the exact moment the pool is tightest
+(§12 of `docs/HANDOVER.md`).
 
 **The rest has to be measured, and with the device's numbers.** Lua costs 10–20× the source, so what
 a cart needs cannot be computed — it has to be run. `sim/heap_probe.c` (compiled into the wasm by
@@ -670,16 +683,18 @@ boundary-tag allocator in `femto8/stub/device/alloc.c` spends an 8-byte header +
 rounded to 8, on *every* block — and a cart is thousands of small Lua blocks, so this is not a
 rounding detail. The wasm is 32-bit like the device; a 64-bit host overstates the same carts by ~2×,
 because Lua is pointer-heavy. 300 frames (10 s of cart time), one cart per **fresh** instance
-(an empty store, so the baseline is the engine's own footprint), against the device's 293,888 B:
+(an empty store, so the baseline is the engine's own footprint), against the device's 303,800 B
+(2026-10-18; it was 293,888 B — §12 of `docs/HANDOVER.md`; §13 then made it 413,160 B):
 
-| cart | measured peak | vs the 287 KB pool |
+| cart | measured peak | vs the pool |
 |---|---|---|
-| baked built-in cart | 108 KB | fits, 179 KB spare |
-| `flipside_-1` | 204 KB | fits, 83 KB spare |
-| `fighter_street_ii-1` | 572 KB | 2.0× over |
-| `baba_demake-9` | 622 KB | 2.2× over |
-| `terra_1cart-44` | 626 KB | 2.2× over |
-| `bunnysurvivor-9` | 2,117 KB | 7.4× over |
+| baked built-in cart | 108 KB | fits, 189 KB spare |
+| `flipside_-1` (12 KB PNG) | 204 KB | fits, 93 KB spare |
+| `loop-4` (13 KB PNG) | 288 KB | fits, 9 KB spare (it was 527 B over) |
+| `fighter_street_ii-1` | 572 KB | 1.9× over |
+| `baba_demake-9` | 623 KB | 2.1× over |
+| `terra_1cart-44` | 626 KB | 2.1× over |
+| `bunnysurvivor-9` | 2,125 KB | 7.2× over |
 
 (A few KB move run to run — GC timing — so these are rounded. `sim_test.mjs` asserts the built-in
 cart fits with room to spare and that `flipside` fits, and reports all five.) A cart over the pool
@@ -688,16 +703,28 @@ takes another upload — not a crash. So picovave on the SMK-37 Pro runs **small
 and host previews have megabytes and run all five. Squeezing modestly more (a smaller overlay, a
 smaller source buffer, freeing between uploads) can win tens of KB — not the ~1 MB baba needs.
 
+> **§13 update (2026-10-18, second reclaim).** The peaks above are the *cost model* against the
+> 303,800 B pool of that moment. The pool is **413,160 B** now, and the default wasm links the
+> device's own allocator, so the verdict is a MEASUREMENT in the device's arena: `baba` (45 KB
+> script, 402 KB peak, 5 refusals in 300 frames) **runs** on the device; `loop-4` and `flipside`
+> run with 0 refusals; `fighter`/`terra` run but hitch badly; `bunnysurvivor` still fails to load
+> and falls back. §13 of `docs/HANDOVER.md` has the table and the 60 s numbers.
+
 **And the page says so before anyone uploads one.** Choosing a `.p8.png` now runs it in a
 **throwaway wasm instance** — its own store, its own heap, its own panel — over the same SysEx
-frames, for 300 frames, and prints the verdict in the cart line: `기기 OK: 실측 peak 204 KB / 287 KB
-(여유 83 KB)` or `⚠ 기기 불가: 실측 peak 622 KB > 기기 풀 287 KB (시뮬레이터 전용)`, with the status
-line amber rather than a claim of success. The running simulator — and a device on the other end of
+frames, for 300 frames, and prints the verdict in the cart line: `✓ 기기 OK: 300프레임 측정에서 거부
+0회 (peak 167 KB / 기기 풀 403 KB)` or `✗ 기기 불가: 카트가 기기 아레나에서 실행되지 않았다 (status
+4 · peak 402 KB / 기기 풀 403 KB)` — §13's wording: the verdict is the device allocator's own run,
+and a cart that runs but hitches is `기기 빠듯`, one that hitches hard is `기기 불가(끊김)`. The status
+line goes amber rather than claiming success. The running simulator — and a device on the other end of
 Web MIDI — is never touched by that measurement, so a cart far too big for the hardware is still
 perfectly good on the simulator. The device limit is a fact the page *reports*, not a rule it
-enforces: the upload path is unchanged. `run_page.mjs` asserts the verdict appears and that an
-oversized cart warns, and `verify_final.py` asserts the page's budget **is** the firmware's
-(`POOL_LEN` minus `PV_POOL_GUARD`), not a second constant that can drift.
+enforces: the upload path is unchanged. Measuring 300 frames of a cart that lives at the edge would
+freeze the page (terra: 71 s of full GCs), so the loop yields every 8 frames and stops as soon as the
+answer cannot change — two frames in a row refusing more than `HITCH_FRAMES` — and says how many
+frames it actually measured. `run_page.mjs` asserts both ends of the gradation (`baba` → `기기 빠듯`,
+`terra` → `기기 불가(끊김)` + a warning) and that early stop; `verify_final.py` asserts the page's
+budget **is** the firmware's (`PV_ARENA` minus `PV_POOL_GUARD`), not a second constant that can drift.
 
 
 

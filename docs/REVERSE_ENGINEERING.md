@@ -13,8 +13,10 @@ M-Vave SMK-37 Pro(AC791N)용 커스텀 펌웨어의 **패키지/앱 구조를 �
 > 보이스(`picovave_app.h` / `picovave_voice.h`)는 더 이상 트리에 없고, 지금의 앱은
 > [picovave/src/picovave_p8.h](picovave/src/picovave_p8.h)(femto8 부팅·프레임 루프·입력→gamepad) +
 > [picovave/src/picovave_cart.h](picovave/src/picovave_cart.h)(SLOOP 카트 저장소·SysEx 업로드) +
-> vendored femto8 엔진(`picovave/femto8/`)이다. 기기 빌드는 `.data+.bss` 144,696 B / POOL
-> `0x01C2C000`+`0x48000`(전부 Lua 힙)로 정리되었고, wasm 시뮬레이터·호스트 프리뷰와 **픽셀 단위로
+> vendored femto8 엔진(`picovave/femto8/`)이다. 기기 빌드는 `.data+.bss` 55,832 B / 아레나
+> 414,184 B(`0x01C0EE18..0x01C74000`, 전부 Lua 힙 — Lua 힙 413,160 B)이고, 렌더 타깃은 패널
+> 240×240이 아니라 **PICO-8 자체의 128×128 RGB565**(표시 경로가 한 줄씩 ×1.875로 확대)라
+> wasm 시뮬레이터·호스트 프리뷰와 **픽셀 단위로
 > 일치**한다. 현재 상태와 검증 항목은 [README.md](README.md)와
 > [PICO8-PORT-PLAN.md](PICO8-PORT-PLAN.md)를 보라. 아래의 앱/보이스/시뮬레이터 서술은 hello 시점의
 > 기록으로 남겨 둔다.

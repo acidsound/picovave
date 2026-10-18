@@ -248,8 +248,11 @@ def main():
     ap.add_argument("--stack", type=lambda v: int(v, 0), default=STACK_SIM, metavar="BYTES",
                     help="C stack for the wasm; --stack %d is the device's own budget (app.ld)" % DEV_STACK)
     ap.add_argument("--device-alloc", action="store_true",
-                    help="run the engine on femto8/stub/device/alloc.c (sim/device_alloc.c) instead "
-                         "of the cost-modelling probe: the simulator's own heap becomes the device's")
+                    help="(the default) run the engine on femto8/stub/device/alloc.c "
+                         "(sim/device_alloc.c): the simulator's own heap becomes the device's")
+    ap.add_argument("--probe-alloc", action="store_true",
+                    help="run the engine on sim/heap_probe.c's cost model instead: a conservative "
+                         "charge per allocation, with no arena and so no refusals")
     a = ap.parse_args()
     a.out = a.out.resolve()                      # a relative --out must not fail the report at the end
 
@@ -276,7 +279,13 @@ def main():
     print("engine   %s" % engine)
     flags = emcc_flags(a.stack)
     print("stack    %d B%s" % (a.stack, "  (the device's own budget)" if a.stack == DEV_STACK else ""))
-    alloc = SIM / "device_alloc.c" if a.device_alloc else None
+    # The DEVICE's allocator is the default, not an option: the page judges a cart by running it
+    # on this allocator in the arena the device links, and a cost model is not that. --probe-alloc
+    # still builds the modelling probe (sim/heap_probe.c), which answers "how high would this
+    # cart's pool get" without an arena - a quick estimate, and what sim_test.mjs falls back on.
+    alloc = (SIM / "heap_probe.c") if a.probe_alloc else (SIM / "device_alloc.c")
+    print("alloc    %s%s" % (alloc.name, "  (device allocator, the device's arena)"
+                             if not a.probe_alloc else "  (cost model, no arena)"))
     wasm = compile_wasm(engine, a.out / "sim.wasm", flags, alloc)
     print("wasm     %s  %d B" % (wasm, wasm.stat().st_size))
 

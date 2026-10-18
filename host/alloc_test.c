@@ -14,8 +14,8 @@
  *
  * Run it with tools/verify_final.py, or directly:
  *     cc -O1 -o build/alloc_test host/alloc_test.c && ./build/alloc_test
- * The arena is the device's own POOL (app.ld: 0x01C2C000 + 0x48000 = 294,912 B minus the 1 KiB red
- * zone), so the sizes and the peak it reports are the device's.
+ * The arena is the device's own (app.ld: [_pool_start,_pool_top), one RAM region from .bss's end to
+ * the stack guard, minus the 1 KiB red zone), so the sizes and the peak it reports are the device's.
  *
  * What it checks, beyond "it did not crash":
  *   - the whole-arena block splits exactly once and the walk still reaches the sentinel
@@ -31,7 +31,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define ARENA 294912u                   /* app.ld: POOL 0x01C2C000 + 0x48000 */
+#define ARENA 414184u                   /* app.ld: [_pool_start,_pool_top), 0x01C0EE18..0x01C74000 */
 #define CANARY 4096u                    /* after the pool: a write here is a bug even if the walk lives */
 
 static uint8_t arena[ARENA + CANARY] __attribute__((aligned(8)));
@@ -40,7 +40,7 @@ static uint8_t arena[ARENA + CANARY] __attribute__((aligned(8)));
 #include "../femto8/stub/device/alloc.c"
 
 #define GUARD    PV_POOL_GUARD
-#define USABLE   (ARENA - GUARD)        /* what the pool really serves: 293,888 B */
+#define USABLE   (ARENA - GUARD)        /* what the pool really serves: 413,160 B */
 #define NHAND    512
 #define CANARY_BYTE 0x5A
 

@@ -229,15 +229,24 @@ if (sampleCart) {
     const file = { name: sampleName,
       arrayBuffer: async () => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) };
     fire("cartp8", "change", { target: { files: [file] } });
-    await new Promise((r) => setTimeout(r, 250));            // loadCart() inflates the image
+    // The page measures the cart before it offers to send it - 300 frames in a throwaway wasm. On a
+    // cart that lives at the edge the pool refuses and Lua collects, so this can take a moment: poll
+    // for the answer instead of guessing a sleep.
+    const waitFor = async (pred, ms = 20000) => {
+      const t0 = Date.now();
+      while (Date.now() - t0 < ms) { if (pred()) return true; await new Promise((r) => setTimeout(r, 20)); }
+      return pred();
+    };
+    await waitFor(() => /해독/.test(txt("cartsay")));        // loadCart() inflates the image
     check("page unwrapped the chosen .p8.png (160x205 -> the 32,804 B cooked payload)",
           txt("cartsay").includes(sampleName) && /해독/.test(txt("cartsay")) &&
           /32804/.test(txt("cartsay")), txt("cartsay"));
-    // ...and told the user, before anything is sent, whether the HARDWARE can hold it: the pool a
-    // cart needs is measured in a throwaway wasm (sim/heap_probe.c), not guessed from its size.
-    await new Promise((r) => setTimeout(r, 500));            // the measurement runs 300 frames
-    check("the page measured the cart against the device's pool before sending it",
-          /기기 (OK|불가)/.test(txt("cartsay")) && /peak/.test(txt("cartsay")), txt("cartsay"));
+    // ...and told the user, before anything is sent, whether the HARDWARE can hold it: the pool is
+    // measured by the device's own allocator over the device's own arena, not guessed from the size.
+    await waitFor(() => /peak/.test(txt("cartsay")));        // the measurement's verdict line
+    check("the page measured the cart in the device's arena before sending it",
+          /기기 (OK|불가|빠듯)/.test(txt("cartsay")) && /거부/.test(txt("cartsay")) &&
+          /peak/.test(txt("cartsay")), txt("cartsay"));
     if (/기기 불가/.test(txt("cartsay")))
       check("...and warned instead of claiming success", elements.status.className === "warn",
             txt("status"));
@@ -287,6 +296,32 @@ if (sampleCart) {
     await new Promise((r) => setTimeout(r, 30));
     check("...and then there is nothing to send", /카트 \.p8\.png/.test(txt("status")), txt("status"));
     check("the refused .p8 changed nothing on the device", txt("draws") === dR, dR + " -> " + txt("draws"));
+
+    // The far end of the gradation, and why the measurement must yield and stop early: terra_1cart-44
+    // is served only by refusing - ~400 refusals a frame, each one a full GC - so the page must stop
+    // long before frame 300, say how much it measured, and never claim the cart runs well. Last,
+    // because it leaves its own cart chosen.
+    const cartDir = path.join(serveDir, "carts");
+    const violent = fs.readdirSync(cartDir)
+      .filter((n) => n.startsWith("terra") && n.endsWith(".p8.png"))[0];
+    if (violent) {
+      const vb = fs.readFileSync(path.join(cartDir, violent));
+      const dV = txt("draws");
+      fire("cartp8", "change", { target: { files: [{ name: violent,
+        arrayBuffer: async () => vb.buffer.slice(vb.byteOffset, vb.byteOffset + vb.byteLength) }] } });
+      // Wait for THIS cart's verdict: the line still carries the previous cart's name until
+      // loadCart() has inflated the image, and its verdict ("peak") until the measurement is done.
+      await waitFor(() => txt("cartsay").includes(violent) && /peak/.test(txt("cartsay")));
+      check("the page reports a cart the pool only serves by refusing, and warns",
+            /기기 불가/.test(txt("cartsay")) && /거부/.test(txt("cartsay")) &&
+            elements.status.className === "warn", txt("cartsay") + " | " + txt("status"));
+      check("...and stopped measuring early instead of freezing on it",
+            /첫 \d+프레임/.test(txt("cartsay")), txt("cartsay"));
+      check("...and choosing a cart changed nothing on the wasm panel", txt("draws") === dV,
+            dV + " -> " + txt("draws"));
+    } else {
+      console.log("skip the refusal-gradation test (no terra*.p8.png served)");
+    }
   } catch (e) {
     check("page cart upload works", false, String((e && e.message) || e));
   }

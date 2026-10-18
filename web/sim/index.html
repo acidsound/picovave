@@ -236,8 +236,10 @@
   시뮬레이터에서 통한 업로드가 실기에서도 그대로 통한다. 커밋되면 그 카트로 곧바로 다시 부팅하고(칩 리셋이 아니라
   실행만 다시 시작), 슬롯에 남아 POWER-ON 뒤에도 다시 뜬다. 텍스트 <code>.p8</code> 은 받지 않는다(작성자가 저장한
   압축 카트보다 2~3배 커서 슬롯에 들어가지 않고, 형식이 둘이면 헷갈린다). 카트를 고르면 올리기 <b>전에</b> 임시
-  wasm 에서 그 카트를 실제로 돌려 <b>기기(SMK-37 Pro) 풀 287 KB 에 들어가는지</b>를 실측해 알려준다 — 못 들어가는
-  카트는 "⚠ 기기 불가 · 시뮬레이터 전용"으로 표시될 뿐, 업로드 자체는 그대로 된다(시뮬레이터에서는 잘 돈다).
+  wasm 에서 그 카트를 <b>기기의 아레나 그대로</b>(기기 allocator·같은 풀 크기) 실제로 돌려 <b>기기에서 실행되는지</b>를
+  실측해 알려준다 — 아예 실행되지 않으면 <b>기기 불가</b>, 가끔 할당이 거부되면 <b>기기 빠듯</b>(GC 히치),
+  자주 거부되면 <b>기기 불가(끊김)</b>으로 표시되고, 이때는 실기로 올리기 전에 한 번 더 확인한다
+  (시뮬레이터에서는 그대로 잘 돈다).
 </div>
 
 <script type="module">
@@ -976,18 +978,35 @@ function renderCartTarget() {
   $("cartErase").textContent = `${t} 슬롯 비우기`;
 }
 
-/* Will this cart run on an SMK-37 Pro? The device gives the engine and Lua ONE pool (POOL_LEN
- * 294,912 B less the allocator's 1 KiB red zone - the number tools/build_picovave.py prints), so
- * the question is how high that pool gets while the cart runs - and a cart's Lua costs 10-20x its
- * source size (baba's 45 KB script needs ~500 KB of Lua), so it has to be MEASURED.
- * sim/heap_probe.c counts exactly what the device's allocator would have to hand out.
+/* Will this cart run on an SMK-37 Pro? The device gives the engine and Lua ONE pool - app.ld's
+ * arena (the RAM region from the end of .bss to the stack guard) less the allocator's 1 KiB red
+ * zone, the number tools/build_picovave.py prints - so the question is how high that pool gets
+ * while the cart runs, and a cart's Lua costs 10-20x its source size (baba's 45 KB script is
+ * charged half a megabyte by the cost model). So it is MEASURED, on the allocator the ROM links:
+ * this wasm is built with femto8/stub/device/alloc.c (tools/build_sim.py's default) over exactly
+ * this arena, and the same pool is what sim_heap_peak()/sim_heap_refused() report.
  *
  * The measurement runs the cart in a THROWAWAY wasm instance: its own store, its own heap, its own
- * panel. The simulator that is on screen - and a real device over MIDI - is never touched, and a
- * cart that is far too big for the hardware is still perfectly good on the simulator. This is the
- * "before upload" warning; the upload itself is unchanged. */
-const DEVICE_HEAP = 294912 - 1024;
+ * panel. The simulator that is on screen - and a real device over MIDI - is never touched: that
+ * instance is handed the whole arena array (DEVICE_ARENA_MAX, below) so a cart that is far too big
+ * for the hardware is still perfectly good on the simulator. This is the "before upload" warning;
+ * the upload itself is unchanged. */
+const DEVICE_HEAP = 414184 - 1024;
+/* The running page simulator's pool: sim/device_alloc.c's PV_ARENA_MAX, i.e. the whole array. Only
+ * the THROWAWAY measurement instance keeps the default PV_ARENA - the device's own arena - because
+ * that instance is the device verdict. */
+const DEVICE_ARENA_MAX = 1024 * 1024;
 const MEASURE_FRAMES = 300;            // 10 s of cart time: enough for a game to reach its steady state
+const HITCH_FRAMES = MEASURE_FRAMES / 10;   // a refusal more often than this is not the odd hitch
+/* Every refusal in the device's allocator is a FAILED allocation, and Lua answers one by collecting
+ * and retrying, so a cart that lives at the edge makes each frame cost a full GC or two. Measured by
+ * hand on this machine: baba 214 ms and loop-4 407 ms for the whole 300 frames, but terra 71 s - it
+ * refuses ~400 times a frame. The verdict is already settled long before then, so the loop yields to
+ * the event loop (or the browser cannot even repaint "측정 중…") and stops as soon as the answer
+ * cannot change: refusing more than HITCH_FRAMES times within ONE frame, twice running, is thrashing,
+ * and thrashing is already "runs but is not worth playing". MEASURE_MS_CAP is only a backstop. */
+const MEASURE_YIELD = 8;               // frames between trips through the event loop
+const MEASURE_MS_CAP = 8000;
 let cartFit = null;                    // the last cart's measurement, for the verdict text
 
 async function measureCart(d) {
@@ -1002,28 +1021,69 @@ async function measureCart(d) {
       new Uint8Array(ex.memory.buffer, ex.sim_sysex_in(), m.length).set(m);
       ex.sim_sysex(m.length);
     }
-    for (let i = 0; i < MEASURE_FRAMES && ex.sim_status() === 0; i++) ex.sim_frame();
+    let i = 0, prev = Number(ex.sim_heap_refused()), thrash = 0;
+    const t0 = Date.now();
+    for (; i < MEASURE_FRAMES && ex.sim_status() === 0; i++) {
+      ex.sim_frame();
+      const r = Number(ex.sim_heap_refused());
+      thrash = (r - prev > HITCH_FRAMES) ? thrash + 1 : 0;   // this frame alone refused that often
+      prev = r;
+      if (thrash >= 2) { i++; break; }                       // ...twice running: stop measuring
+      if (Date.now() - t0 > MEASURE_MS_CAP) break;
+      if (i % MEASURE_YIELD === MEASURE_YIELD - 1) await new Promise((r2) => setTimeout(r2, 0));
+    }
     // refused/running are what the verdict really rests on. A cart the device's pool cannot serve is
     // REFUSED (the load fails outright), and the firmware's boot ladder then falls back to a cart
     // that runs - so status alone no longer tells the cart's own story (docs/HANDOVER.md §7).
+    // deviceAlloc says which allocator answered: 1 = femto8/stub/device/alloc.c over the device's
+    // own arena (this build), 0 = the --probe-alloc cost model (no arena, refusals always 0).
+    // frames is how much of the 300 was actually measured, so nothing claims more than it ran.
     return { peak: Number(ex.sim_heap_peak()), refused: Number(ex.sim_heap_refused()),
-             status: ex.sim_status(), running: Number(ex.sim_cart_running()) };
+             status: ex.sim_status(), running: Number(ex.sim_cart_running()),
+             frames: i, deviceAlloc: Number(ex.sim_device_alloc()) === 1 };
   } catch (e) {
     return null;
   }
 }
 
-/* The verdict, in the same words the status line uses. */
+/* The verdict on the last cart, and the gate the FLASH(USB) upload asks through. Two different
+ * questions live here, and conflating them is how a cart the device demonstrably runs
+ * (baba_demake-9, once the arena could hold it) got branded "기기 불가":
+ *
+ *   - did it RUN in the arena the device links, on the device's own allocator, and did that
+ *     allocator ever REFUSE? That is a MEASUREMENT: this wasm links femto8/stub/device/alloc.c
+ *     (sim/device_alloc.c) over PV_ARENA - the same number app.ld gives the ROM. A refusal is
+ *     survivable (Lua's luaM_realloc_ runs a full GC and retries) and can even be rare, which is
+ *     the whole gradation: 0 refusals is comfortable, a few is the odd hitch, one every few frames
+ *     is a cart that runs but is not worth playing. A cart femto8 cannot boot shows as status != 0.
+ *   - what does sim_heap_peak() say the pool would have to hold? On the device allocator that is
+ *     the real high-water mark of the pool. On a --probe-alloc build it is the cost model's
+ *     deliberately conservative charge, and there is no arena to refuse - so there the model's
+ *     number is all there is, and a peak over the pool has to be taken as the verdict. */
+function cartTight(f) {
+  if (!f) return false;
+  return f.status !== 0 || f.refused > HITCH_FRAMES || (!f.deviceAlloc && f.peak > DEVICE_HEAP);
+}
 function fitText() {
   if (!cartFit) return "";
   const kb = (n) => Math.round(n / 1024).toLocaleString();
+  const peak = `peak ${kb(cartFit.peak)} KB / 기기 풀 ${kb(DEVICE_HEAP)} KB`;
+  const early = cartFit.frames < MEASURE_FRAMES;
+  const howlong = early ? `첫 ${cartFit.frames}프레임` : `${MEASURE_FRAMES}프레임`;
   if (cartFit.status !== 0)
-    return ` · 기기 판정: 카트가 로드되지 않는다 (status ${cartFit.status})`;
-  if (cartFit.refused > 0 || cartFit.peak > DEVICE_HEAP)
-    return ` · ⚠ 기기 불가: 실측 peak ${kb(cartFit.peak)} KB / 기기 풀 ${kb(DEVICE_HEAP)} KB` +
-      (cartFit.refused ? ` · 기기 풀이 ${cartFit.refused}회 거부` : "") +
-      ` (시뮬레이터 전용 · 기기에서는 기본 카트로 폴백)`;
-  return ` · 기기 OK: 실측 peak ${kb(cartFit.peak)} KB / ${kb(DEVICE_HEAP)} KB (여유 ${kb(DEVICE_HEAP - cartFit.peak)} KB)`;
+    return ` · ✗ 기기 불가: 카트가 기기 아레나에서 실행되지 않았다 (status ${cartFit.status} · ${peak})`;
+  if (cartFit.refused > HITCH_FRAMES)
+    return ` · ⚠ 기기 불가(끊김): ${howlong} 측정에서 기기 allocator가 ` +
+           `${cartFit.refused}회 거부했다 — GC 가 계속 끼어든다 (${peak})`;
+  if (cartFit.refused > 0)
+    return ` · ⚠ 기기 빠듯: ${howlong} 측정에서 ${cartFit.refused}회 거부 ` +
+           `(가끔 끊길 수 있다 · ${peak})`;
+  if (!cartFit.deviceAlloc && cartFit.peak > DEVICE_HEAP)
+    return ` · ⚠ 기기 불가(비용 모델): 보수적 비용 모델의 ${peak} — 이 빌드는 arena 없는 cost ` +
+           `model 이라 거부를 세지 못한다. 실기에서 돌 수도 있다`;
+  if (early)
+    return ` · ⚠ 기기 판정 보류: 측정이 ${cartFit.frames}프레임에서 멈췄다 (거부 0회 · ${peak})`;
+  return ` · ✓ 기기 OK: ${MEASURE_FRAMES}프레임 측정에서 거부 0회 (${peak})`;
 }
 
 async function loadCart(file) {
@@ -1042,9 +1102,14 @@ async function loadCart(file) {
   $("cartsay").textContent = `${cartName} · 160x205 해독 · ${cartRaw.length} B (쿠킹 32,800) · 기기 적합성 측정 중…`;
   cartFit = await measureCart(cartRaw);
   $("cartsay").textContent = `${cartName} · 160x205 해독 · ${cartRaw.length} B (쿠킹 32,800)${fitText()}`;
-  if (cartFit && (cartFit.status !== 0 || cartFit.refused > 0 || cartFit.peak > DEVICE_HEAP))
-    warn(`${cartName} 준비됨 — 그러나 기기(SMK-37 Pro)에서는 돌지 않는다: ${fitText().slice(3)} · ` +
-         `대상 ${CART_TARGETS[cartTarget]} 을 확인하고 올릴 것`);
+  if (cartFit && cartFit.refused > 0)
+    // A cart the pool served only by refusing still runs, but a refusal IS a hitch (Lua collects and
+    // retries): amber, and the line says how often. cartTight() is the harder gate the upload asks.
+    warn(`${cartName} 준비됨 — ${fitText().slice(3)} · ` +
+         `대상 ${CART_TARGETS[cartTarget]} · 카트 업로드를 누르세요`);
+  else if (cartTight(cartFit))
+    warn(`${cartName} 준비됨 — 그러나 기기(SMK-37 Pro) 판정이 좋지 않다: ` +
+         `${fitText().slice(3)} · 대상 ${CART_TARGETS[cartTarget]} 을 확인하고 올릴 것`);
   else
     ok(`${cartName} 준비됨 — 쿠킹 카트 ${cartRaw.length} B (마법 + ROM 17,152 + 코드 15,648)${fitText()} · ` +
        `대상 ${CART_TARGETS[cartTarget]} · 카트 업로드를 누르세요`);
@@ -1138,11 +1203,14 @@ async function uploadCartUsb(d) {
   if (!webMidiSupported()) { fail("이 브라우저에는 Web MIDI 가 없다 — Chrome 을 https / localhost 로 열 것"); return; }
   /* The device survives a cart it cannot run - the boot ladder falls back to a cart that does
    * (docs/HANDOVER.md §7) - but uploading one is still pointless, and it is exactly the case that
-   * used to leave the panel on the boot screen. Say so and ask, rather than send it silently. */
-  if (cartFit && (cartFit.status !== 0 || cartFit.refused > 0 || cartFit.peak > DEVICE_HEAP) &&
-      !confirm(`${cartName} 은 기기(SMK-37 Pro)에서 돌지 않는다:\n\n${fitText().slice(3)}\n\n` +
-               `그래도 실기에 올릴까? 기기는 기본/이전 카트로 폴백하며, 이 카트는 실행되지 않는다.`))
-    { fail("FLASH(USB) 카트 업로드 취소 — 기기에서 돌지 않는 카트"); return; }
+   * used to leave the panel on the boot screen. Say so and ask, rather than send it silently.
+   * The gate is the measurement on the device's own allocator/arena (cartTight): status, and the
+   * refusals it really made. */
+  if (cartTight(cartFit) &&
+      !confirm(`${cartName} 은 기기(SMK-37 Pro)에서 빠듯하거나 실행되지 않는다:\n\n` +
+               `${fitText().slice(3)}\n\n` +
+               `그래도 실기에 올릴까? 기기는 기본/이전 카트로 폴백하므로 멈추지는 않는다.`))
+    { fail("FLASH(USB) 카트 업로드 취소 — 기기가 감당하지 못한 카트"); return; }
   const slot = cartSlot;
   cartSlot ^= 1;
   const msgs = cartFrames(slot, cartName, d);
@@ -1263,13 +1331,17 @@ function simImports(mod) {
 }
 
 /* Instantiate an already-compiled module (measuring a cart does this a second time, for its own
- * store and heap, so the module is compiled once and reused). */
-async function instantiateModule(mod) {
+ * store and heap, so the module is compiled once and reused). `arena` is the pool the engine and
+ * Lua get: the running simulator asks for the whole array, the measurement asks for nothing and
+ * so gets the device's own arena (sim/device_alloc.c's PV_ARENA). Must be set before the first
+ * allocation, i.e. before sim_init() - the instance has only _initialize()d so far. */
+async function instantiateModule(mod, arena) {
   const { imports, bind } = simImports(mod);
   const inst = await WebAssembly.instantiate(mod, imports);
   const e = inst.exports;
   bind(e.memory);
   if (e._initialize) e._initialize();
+  if (arena && typeof e.sim_arena_set === "function") e.sim_arena_set(arena);
   return e;
 }
 
@@ -1287,7 +1359,10 @@ async function boot() {
       wasmBytes[k] = b;
       // Compile once: the running instance and the throwaway one the cart measurement makes share it.
       probeMods[k] = await WebAssembly.compile(b);
-      exs[k] = await instantiateModule(probeMods[k]);
+      // The page is a SIMULATOR first: the running instance gets the whole arena array, so a cart
+      // too big for the hardware still plays here. The measurement (measureCart) instantiates
+      // without an arena on purpose, and judges the cart on the device's own pool.
+      exs[k] = await instantiateModule(probeMods[k], DEVICE_ARENA_MAX);
     } catch (e) { exs[k] = null; }
   }
   for (const k of Object.keys(FW)) {
