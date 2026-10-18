@@ -25,134 +25,184 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SMK-37 Pro simulator - picovave</title>
 <style>
-  :root { --bg: #030308; --cy: #3cf0ff; --mg: #ff3cd2; --dim: #6f7c9a; --line: #1d4a5a; --ok: #46e646; }
+  /* PICO-8's 16 colours and nothing else. Flat fills, no glow: this is an instrument panel, not a
+     light show. A border is kept only where a control must be found without reading (the primary
+     actions, the screen, the keys, the drop targets); everything else is a fill on the panel. */
+  :root {
+    --p0:#000000; --p1:#1D2B53; --p2:#7E2553; --p3:#008751; --p4:#AB5236;
+    --p5:#5F574F; --p6:#C2C3C7; --p7:#FFF1E8; --p8:#FF004D; --p9:#FFA300;
+    --p10:#FFEC27; --p11:#00E436; --p12:#29ADFF; --p13:#83769C; --p14:#FF77A8; --p15:#FFCCAA;
+    --bg:var(--p0); --fg:var(--p7); --panel:var(--p1); --dim:var(--p13);
+    --ok:var(--p11); --warn:var(--p9); --err:var(--p8); --accent:var(--p12);
+  }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--cy); font: 13px/1.3 system-ui, sans-serif; user-select: none;
-         -webkit-user-select: none; touch-action: manipulation; }
-  header { padding: 12px 16px 4px; display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: baseline; }
-  header h1 { margin: 0; font-size: 22px; color: var(--mg); letter-spacing: 3px; text-shadow: 0 0 10px var(--mg); }
-  header span { color: var(--dim); }
-  #status.err { color: #ff8080; }
-  #status.warn { color: #ffcc66; }
-  code { color: var(--mg); }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+         user-select:none; -webkit-user-select:none; touch-action:manipulation; }
+  header { display:flex; flex-wrap:wrap; gap:4px 14px; align-items:baseline;
+           padding:10px 16px; background:var(--panel); border-bottom:2px solid var(--p0); }
+  header h1 { margin:0; font-size:18px; letter-spacing:3px; color:var(--p10); }
+  header span { color:var(--dim); }
+  #status { margin-left:auto; color:var(--p6); }
+  #status.err { color:var(--p8); } #status.warn { color:var(--p9); } #status.ok { color:var(--p11); }
+  code { color:var(--p12); }
+  main { max-width:1500px; margin:0 auto; padding:12px; }
 
-  /* the panel: the SMK-37 Pro's arrangement, left to right; the blocks wrap on narrow windows */
-  .smk { margin: 6px auto; max-width: 1500px; padding: 16px; border: 1px solid var(--cy); border-radius: 18px;
-         box-shadow: 0 0 18px #3cf0ff33, inset 0 0 30px #3cf0ff11; display: flex; flex-direction: column; gap: 18px; }
-  .top { display: flex; flex-wrap: wrap; gap: 22px; justify-content: space-around; align-items: flex-start; }
-  .blk { display: flex; gap: 14px; align-items: flex-start; }
-  .lab { text-align: center; color: var(--dim); font-size: 12px; font-weight: 600; letter-spacing: 1px; margin-top: 4px; }
+  /* ---- always visible: the instrument ---- */
+  .rig { background:var(--panel); border:2px solid var(--p0); border-radius:10px; padding:14px;
+         display:flex; flex-direction:column; gap:14px; }
+  .top { display:flex; flex-wrap:wrap; gap:20px; justify-content:space-around; align-items:flex-start; }
+  .blk { display:flex; gap:12px; align-items:flex-start; }
+  .lab { text-align:center; color:var(--p6); font-size:11px; letter-spacing:1px; margin-top:4px; }
 
-  /* sliders: the wheels and the faders as neon slots */
-  input.v { writing-mode: vertical-lr; direction: rtl; -webkit-appearance: none; appearance: none; background: transparent;
-            width: 40px; height: 150px; margin: 0; cursor: pointer; }
-  .faders input.v { height: 104px; }
-  input.v::-webkit-slider-runnable-track { width: 6px; border-radius: 3px; background: #000; border: 1px solid var(--cy);
-            box-shadow: 0 0 8px var(--cy); }
-  input.v::-moz-range-track { width: 6px; border-radius: 3px; background: #000; border: 1px solid var(--cy); box-shadow: 0 0 8px var(--cy); }
-  input.v::-webkit-slider-thumb { -webkit-appearance: none; width: 34px; height: 16px; border-radius: 3px; background: #04121a;
-            border: 2px solid var(--cy); box-shadow: 0 0 10px var(--cy); margin-left: -15px; }
-  input.v::-moz-range-thumb { width: 30px; height: 12px; border-radius: 3px; background: #04121a; border: 2px solid var(--cy);
-            box-shadow: 0 0 10px var(--cy); }
-  input.v.w::-webkit-slider-thumb { height: 34px; border-color: var(--mg); box-shadow: 0 0 10px var(--mg); }
-  input.v.w::-moz-range-thumb { height: 30px; border-color: var(--mg); box-shadow: 0 0 10px var(--mg); }
+  input.v { writing-mode:vertical-lr; direction:rtl; -webkit-appearance:none; appearance:none;
+            background:transparent; width:34px; height:150px; margin:0; cursor:pointer; }
+  .faders input.v { height:104px; }
+  input.v::-webkit-slider-runnable-track { width:6px; border-radius:3px; background:var(--p0); }
+  input.v::-moz-range-track { width:6px; border-radius:3px; background:var(--p0); }
+  input.v::-webkit-slider-thumb { -webkit-appearance:none; width:30px; height:14px; border-radius:2px;
+            background:var(--p6); border:2px solid var(--p0); margin-left:-12px; }
+  input.v::-moz-range-thumb { width:26px; height:12px; border-radius:2px; background:var(--p6); border:2px solid var(--p0); }
+  input.v.w::-webkit-slider-thumb { height:30px; background:var(--p15); }
+  input.v.w::-moz-range-thumb { height:26px; background:var(--p15); }
 
-  .scr { display: flex; flex-direction: column; gap: 10px; }
-  #screen { width: 240px; height: 240px; image-rendering: pixelated; image-rendering: crisp-edges; display: block;
-            border: 2px solid var(--cy); border-radius: 6px; box-shadow: 0 0 14px #3cf0ff66; background: #000; }
-  @media (min-width: 1900px) { #screen { width: 480px; height: 480px; } .smk { max-width: 1900px; } }
-  .nav { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-  .meter { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--dim); font-variant-numeric: tabular-nums; font-size: 12px; }
-  .meter b { color: var(--cy); font-weight: 600; }
-  .ctl { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .ctl button, .ctl a, .ctl label { font: inherit; font-weight: 700; letter-spacing: 1px; color: var(--cy); background: #000;
-                border: 1.5px solid var(--cy); border-radius: 8px; padding: 8px 14px; cursor: pointer; text-decoration: none;
-                box-shadow: 0 0 6px #3cf0ff55; }
-  .ctl button:hover, .ctl a:hover, .ctl label:hover { background: #0a3440; }
-  .ctl button.on { color: #fff; background: #3a0a30; border-color: var(--mg); box-shadow: 0 0 14px var(--mg); }
-  .ctl input[type=file] { display: none; }
-  .ctl.flash { margin-top: 6px; padding-top: 8px; border-top: 1px dashed #3cf0ff33; }
-  .ctl.flash button { border-color: var(--mg); color: var(--mg); box-shadow: 0 0 6px #ff3cf055; }
-  .ctl.flash button:hover { background: #3a0a30; color: #fff; }
-  .ctl select { font: inherit; font-weight: 700; color: var(--cy); background: #000; border: 1.5px solid var(--mg);
-                border-radius: 8px; padding: 8px 10px; max-width: 220px; cursor: pointer; }
-  .ctl select:focus { outline: 1px solid var(--cy); }
-  .ctl.cart { margin-top: 6px; padding-top: 8px; border-top: 1px dashed #3cf0ff33; }
-  .ctl.cart label { border-color: #7CFC7C; color: #7CFC7C; box-shadow: 0 0 6px #7cfc7c55; }
-  .ctl.cart label:hover { background: #0a3010; color: #fff; }
-  .ctl.cart button { border-color: #7CFC7C; color: #7CFC7C; box-shadow: 0 0 6px #7cfc7c55; }
-  .ctl.cart button:hover { background: #0a3010; color: #fff; }
-  .ctl.cart b { color: var(--dim); font-weight: 600; font-size: 12px; }
-  .ctl.cart code { color: var(--cy); }
+  .scr { display:flex; flex-direction:column; gap:8px; }
+  #screen { width:240px; height:240px; image-rendering:pixelated; image-rendering:crisp-edges; display:block;
+            border:2px solid var(--p0); border-radius:2px; background:var(--p0); }
+  @media (min-width:1900px) { #screen { width:480px; height:480px; } main { max-width:1900px; } }
+  .nav { display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; }
 
-  /* buttons */
-  .btn { border: 1.5px solid var(--cy); border-radius: 7px; text-align: center; cursor: pointer; color: var(--cy);
-         font-size: 11px; font-weight: 700; padding: 5px 2px; min-height: 40px; background: #000;
-         box-shadow: 0 0 6px #3cf0ff55; display: flex; flex-direction: column; justify-content: center; line-height: 1.15; }
-  .btn small { display: block; color: var(--dim); font-size: 10px; font-weight: 400; }
-  .btn.lit, .btn.down { border-color: var(--mg); color: #fff; background: #3a0a30; box-shadow: 0 0 14px var(--mg); }
+  /* buttons: filled, not outlined */
+  .btn { border:none; border-radius:3px; text-align:center; cursor:pointer; color:var(--fg);
+         background:var(--p5); font:inherit; font-size:11px; font-weight:700; padding:6px 2px;
+         min-height:40px; display:flex; flex-direction:column; justify-content:center; line-height:1.15; }
+  .btn small { display:block; color:var(--p6); font-size:10px; font-weight:400; }
+  .btn.lit, .btn.down { background:var(--p8); color:var(--p7); }
 
-  /* knobs over the pads, one column each */
-  .mid { display: grid; grid-template-columns: repeat(8, 72px); row-gap: 10px; }
-  .knob { display: flex; flex-direction: column; align-items: center; gap: 3px; cursor: ns-resize; touch-action: none; }
-  .knob .dial { width: 54px; height: 54px; border-radius: 50%; border: 3px solid var(--c); position: relative;
-                box-shadow: 0 0 12px var(--c), inset 0 0 10px var(--c); }
-  .knob .dial::after { content: ""; position: absolute; left: 50%; top: 3px; width: 3px; height: 18px; margin-left: -1.5px;
-                       background: #fff; box-shadow: 0 0 6px #fff; border-radius: 2px; transform-origin: 50% 21px;
-                       transform: rotate(var(--a, 0deg)); }
-  .knob b { font-size: 13px; color: var(--c); text-shadow: 0 0 6px var(--c); }
-  .pad { height: 60px; margin: 0 5px; border-radius: 8px; border: 2px solid var(--c); opacity: .9; cursor: pointer;
-         background: #000; position: relative; box-shadow: 0 0 6px var(--c); }
-  .pad i { position: absolute; left: 6px; top: 3px; font-style: normal; color: #ffffffaa; font-size: 12px; font-weight: 700; }
+  .mid { display:grid; grid-template-columns:repeat(8, 72px); row-gap:10px; }
+  .knob { display:flex; flex-direction:column; align-items:center; gap:3px; cursor:ns-resize; touch-action:none; }
+  .knob .dial { width:52px; height:52px; border-radius:50%; background:var(--p5);
+                border:2px solid var(--p0); position:relative; }
+  .knob .dial::after { content:""; position:absolute; left:50%; top:4px; width:3px; height:16px; margin-left:-1.5px;
+                background:var(--c, var(--p10)); border-radius:2px; transform-origin:50% 20px;
+                transform:rotate(var(--a, 0deg)); }
+  .knob b { font-size:11px; color:var(--p6); }
+  /* pads: one solid grey like the buttons; the column's colour is the label, and the whole pad
+     takes that colour while it is held. Sixteen saturated rectangles would be a fairground. */
+  .pad { height:58px; margin:0 4px; border-radius:3px; background:#5F574F; cursor:pointer;
+         position:relative; }
+  .pad.down { background:var(--c, var(--p8)); }
+  .pad.down i { color:var(--p0); }
+  .pad i { position:absolute; left:5px; top:3px; font-style:normal; color:var(--c, var(--p7));
+           font-size:11px; font-weight:700; }
 
-  /* faders over the 2 x 6 buttons */
-  .rgt { display: flex; flex-direction: column; gap: 8px; }
-  .faders { display: flex; justify-content: space-around; }
-  .grid6 { display: grid; grid-template-columns: repeat(6, 62px); gap: 6px; }
+  .rgt { display:flex; flex-direction:column; gap:8px; }
+  .faders { display:flex; justify-content:space-around; }
+  .grid6 { display:grid; grid-template-columns:repeat(6, 62px); gap:6px; }
 
-  /* keys */
-  .keys { position: relative; height: 150px; display: flex; touch-action: none; }
-  .key { cursor: pointer; border-radius: 0 0 6px 6px; }
-  .key.w { flex: 1; border: 1.5px solid var(--cy); margin: 0 1px; background: #000; box-shadow: inset 0 0 8px #3cf0ff33; }
-  .key.b { position: absolute; top: 0; height: 62%; border: 1.5px solid var(--mg); background: #12020e; z-index: 2;
-           box-shadow: 0 0 6px #ff3cd277; }
-  .key.down.w { background: #3cf0ff; box-shadow: 0 0 18px var(--cy); }
-  .key.down.b { background: var(--mg); box-shadow: 0 0 18px var(--mg); }
+  /* the keyboard: solid naturals with a bottom lip, solid sharps, PICO-8 blue when pressed.
+     No horizontal padding or key margin: the black keys are placed in % of the tray, so any
+     inset would walk them off the naturals. */
+  .keys { position:relative; height:150px; display:flex; touch-action:none;
+          background:var(--p5); border-radius:6px; padding:8px 0 0; }
+  .key { cursor:pointer; border-radius:0 0 3px 3px; }
+  .key.w { flex:1; margin:0; background:var(--p7); box-shadow:inset -1px 0 0 var(--p6), inset 0 -5px 0 var(--p6); }
+  .key.b { position:absolute; top:8px; height:62%; background:var(--p0); z-index:2;
+           box-shadow:inset 0 -4px 0 #333333; }
+  .key.down.w { background:var(--p12); box-shadow:inset -1px 0 0 #1b6fa8, inset 0 -5px 0 #1b6fa8; }
+  .key.down.b { background:var(--p8); }
 
-  /* DEVICE: the simulated flash an install writes. A model, not a USB flasher. */
-  .dev { margin: 6px auto; max-width: 1500px; padding: 14px 16px; border: 1px dashed var(--dim); border-radius: 14px;
-         display: flex; flex-direction: column; gap: 10px; }
-  .dev h2 { margin: 0; font-size: 13px; letter-spacing: 2px; color: var(--mg); }
-  .devrow { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; color: var(--dim); }
-  .devrow b { color: var(--cy); font-variant-numeric: tabular-nums; }
-  .dev pre { margin: 0; padding: 8px 10px; background: #08080f; border: 1px solid #1b2740; border-radius: 8px;
-             color: #b8c6e0; font: 11px/1.4 ui-monospace, monospace; white-space: pre-wrap; overflow-x: auto; }
-  #drop { flex: 1 1 220px; min-height: 30px; display: flex; align-items: center; justify-content: center; padding: 6px 10px;
-          border: 1px dashed var(--cy); border-radius: 8px; color: var(--dim); }
-  #drop.hot { background: #0a3440; color: #fff; }
+  .ctl { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  .ctl button, .ctl a, .ctl label, .ctl select {
+      font:inherit; font-size:12px; font-weight:700; letter-spacing:.5px; color:var(--fg);
+      background:var(--p5); border:2px solid var(--p0); border-radius:3px; padding:7px 12px;
+      cursor:pointer; text-decoration:none; }
+  .ctl button:hover, .ctl a:hover, .ctl label:hover, .ctl select:hover { background:var(--p13); }
+  .ctl .ghost { background:transparent; border:none; color:var(--p6); padding:7px 6px; }
+  .ctl .ghost:hover { background:var(--p5); color:var(--fg); }
+  .ctl .pri { background:var(--p12); color:var(--p0); }
+  .ctl .pri:hover { background:var(--p6); }
+  .ctl .danger { background:var(--p8); color:var(--p7); }
+  .ctl .danger:hover { background:var(--p14); }
+  .ctl button.on { background:var(--p11); color:var(--p0); }
+  .ctl input[type=file] { display:none; }
+  .ctl select { max-width:220px; }
+  .ctl b { color:var(--dim); font-weight:600; font-size:12px; }
 
-  .help { max-width: 1200px; margin: 8px auto 30px; padding: 0 16px; color: var(--dim); }
-  .help code { color: var(--cy); }
-  @media (max-width: 700px) { .keys { height: 120px; } .mid { grid-template-columns: repeat(8, minmax(38px, 1fr)); }
-    .knob .dial { width: 34px; height: 34px; } .knob .dial::after { height: 11px; transform-origin: 50% 14px; }
-    .pad { height: 40px; margin: 0 2px; } .grid6 { grid-template-columns: repeat(6, minmax(48px, 1fr)); }
-    .blk, .rgt, .mid { width: 100%; } .top { justify-content: center; } }
+  /* ---- only when opened ---- */
+  details.box { background:var(--panel); border:2px solid var(--p0); border-radius:8px; margin:12px 0; }
+  details.box > summary { cursor:pointer; padding:10px 14px; color:var(--p10); font-weight:700;
+                          letter-spacing:1px; list-style:none; }
+  details.box > summary::-webkit-details-marker { display:none; }
+  details.box > summary::before { content:"\25B8 "; color:var(--p13); }
+  details.box[open] > summary::before { content:"\25BE "; }
+  details.box .body { padding:0 14px 14px; display:flex; flex-direction:column; gap:10px; }
+
+  details.stats { margin-left:auto; }
+  details.stats > summary { cursor:pointer; color:var(--p6); list-style:none; font-size:12px; }
+  details.stats > summary::-webkit-details-marker { display:none; }
+  details.stats > summary::before { content:"\25B8 "; color:var(--p13); }
+  details.stats[open] > summary::before { content:"\25BE "; }
+  .meter { display:flex; flex-wrap:wrap; gap:2px 12px; color:var(--dim); font-size:11px;
+           font-variant-numeric:tabular-nums; padding-top:4px; }
+  .meter b { color:var(--p6); font-weight:600; }
+
+  /* ---- a separate screen: one bar for every operation that takes time ---- */
+  .prog { display:flex; align-items:center; gap:10px; }
+  .prog .bar { flex:1; height:10px; background:var(--p0); border-radius:2px; overflow:hidden; }
+  .prog .bar i { display:block; height:100%; width:0; background:var(--p11); transition:width .12s linear; }
+  .prog .bar.indet i { width:35%; animation:slide 1.1s ease-in-out infinite; }
+  @keyframes slide { 0% { margin-left:-35%; } 100% { margin-left:100%; } }
+  .prog span { color:var(--p6); font-size:11px; min-width:9em; }
+
+  .devrow { display:flex; flex-wrap:wrap; gap:6px 18px; align-items:center; color:var(--dim); font-size:12px; }
+  .devrow b { color:var(--p6); font-variant-numeric:tabular-nums; }
+  .dev pre { margin:0; padding:8px 10px; background:var(--p0); border-radius:3px; color:var(--p6);
+             font:11px/1.4 ui-monospace, monospace; white-space:pre-wrap; overflow:auto; }
+  #pkg { max-height:150px; }
+  #flashlog { max-height:220px; }
+  #drop { flex:1 1 220px; min-height:30px; display:flex; align-items:center; justify-content:center;
+          padding:6px 10px; border:2px dashed var(--p13); border-radius:3px; color:var(--dim); }
+  #drop.hot { background:var(--p3); color:var(--p7); }
+  #cartdrop { border-style:dashed; }
+
+  .help { color:var(--p6); font-size:12px; line-height:1.6; }
+  .help b { color:var(--p7); }
+  .help code { color:var(--p12); }
+  @media (max-width:700px) { .keys { height:120px; } .mid { grid-template-columns:repeat(8, minmax(38px,1fr)); }
+    .knob .dial { width:34px; height:34px; } .knob .dial::after { height:11px; transform-origin:50% 14px; }
+    .pad { height:40px; margin:0 2px; } .grid6 { grid-template-columns:repeat(6, minmax(48px,1fr)); }
+    .blk, .rgt, .mid { width:100%; } .top { justify-content:center; } }
 </style>
 </head>
 <body>
 <header>
   <h1 id="brand">PICOVAVE</h1>
-  <span id="moto">SMK-37 Pro · PICO-8 · <code>picovave_p8.h</code> is the firmware's own source</span>
+  <span id="moto">SMK-37 Pro · PICO-8</span>
   <span id="status">wasm 로딩 중…</span>
 </header>
 
-<div class="smk">
-  <div class="top">
-    <div class="blk">
-      <div class="wheels" id="wheels"></div>
-      <div class="scr">
-        <canvas id="screen" width="240" height="240"></canvas>
-        <div class="nav" id="nav"></div>
+<main>
+  <!-- always visible: the instrument -->
+  <section class="rig">
+    <div class="top">
+      <div class="blk">
+        <div class="wheels" id="wheels"></div>
+        <div class="scr">
+          <canvas id="screen" width="240" height="240"></canvas>
+          <div class="nav" id="nav"></div>
+        </div>
+      </div>
+      <div class="mid" id="mid"></div>
+      <div class="rgt"><div class="faders" id="faders"></div><div class="grid6" id="grid6"></div></div>
+    </div>
+    <div class="keys" id="keys"></div>
+    <div class="ctl">
+      <button id="boot" class="pri">POWER-ON</button>
+      <button id="sound">SOUND</button>
+      <button id="refresh" class="ghost">TICK</button>
+      <details class="stats" id="stats">
+        <summary>상태</summary>
         <div class="meter">
           <span>갱신 <b id="draws">-</b></span>
           <span>루프 <b id="boots">-</b></span>
@@ -160,87 +210,73 @@
           <span>바이트 <b id="bytes">-</b></span>
           <span>WDT <b id="wdt">-</b></span>
         </div>
-      </div>
+      </details>
     </div>
-    <div class="mid" id="mid"></div>
-    <div class="rgt"><div class="faders" id="faders"></div><div class="grid6" id="grid6"></div></div>
-  </div>
-  <div class="keys" id="keys"></div>
-  <div class="ctl">
-    <button id="boot">POWER-ON</button>
-    <button id="refresh">TICK</button>
-    <button id="sound">SOUND</button>
-  </div>
-</div>
+  </section>
 
-<div class="dev">
-  <h2>DEVICE · 시뮬레이터(웹) 와 플래시(USB·SysEx)</h2>
-  <div class="devrow">
-    <span>설치된 앱 <b id="device">PICOVAVE</b></span>
-    <span>identity <b id="devid">-</b></span>
-    <span>flash <b id="devsize">0x100000 (1 MB)</b></span>
-    <span>app 슬롯 <b id="devapp">-</b></span>
-    <span>보호영역 <b id="devprot">-</b></span>
-  </div>
-  <div class="ctl">
-    <button id="simPicovave" class="on">SIMULATOR picovave.fwsc</button>
-    <label id="drop">원복용 .fwsc 선택 / 끌어다 놓기<input type="file" id="v016" accept=".fwsc"></label>
-    <button id="simRestore">SIMULATOR 복원</button>
-    <a id="dlPicovave" href="./picovave.fwsc" download>picovave.fwsc 내려받기</a>
-  </div>
-  <div class="ctl flash">
-    <button id="flashPicovave">FLASH(USB) picovave.fwsc</button>
-    <button id="flashRestore">FLASH(USB) 복원</button>
-    <select id="midiport" title="FLASH(USB) 가 쓸 MIDI 포트"></select>
-    <button id="midiscan">MIDI 포트 진단</button>
-  </div>
-  <div class="ctl cart">
-    <label id="cartdrop">카트 <code>.p8.png</code> 선택 / 끌어다 놓기<input type="file" id="cartp8" accept=".p8.png"></label>
-    <select id="cartmode" title="카트를 넣을 곳">
-      <option value="sim">SIMULATOR (웹 wasm 저장소)</option>
-      <option value="usb">FLASH(USB) (실기 SLOOP)</option>
-    </select>
-    <button id="cartSend">SIMULATOR 카트(.p8.png) 업로드</button>
-    <button id="cartErase">SIMULATOR 슬롯 비우기</button>
-    <b id="cartsay">-</b>
-  </div>
-  <pre id="pkg">패키지 확인 중…</pre>
-  <pre id="flashlog"></pre>
-</div>
+  <!-- only when opened: install, flash, carts, the log -->
+  <details class="box" id="devbox">
+    <summary>DEVICE · 플래시 / 카트</summary>
+    <div class="body">
+      <div class="devrow">
+        <span>설치된 앱 <b id="device">PICOVAVE</b></span>
+        <span>identity <b id="devid">-</b></span>
+        <span>flash <b id="devsize">0x100000 (1 MB)</b></span>
+        <span>app 슬롯 <b id="devapp">-</b></span>
+        <span>보호영역 <b id="devprot">-</b></span>
+      </div>
 
-<div class="help">
-  <b>picovave</b> 펌웨어를 브라우저에서 실행하는 페이지다. 패널은 SMK-37 Pro 그대로 —
-  휠(PITCH·MOD) · 화면과 그 아래 6버튼 · K1..K8 과 16 패드 · 페이더와 2×6 버튼 · 건반 — 이고,
-  picovave 는 <b>PICO-8(femto8) 카트</b>를 실행하고, 패드·페이더·휠·건반 입력을 PICO-8 패드로 매핑한다.
-  실행기는 picovave 자신의 오디오 워클릿(<code>picovave/sim/worklet.js</code>)이고, 실행되는 코드는 펌웨어와
-  같은 소스(<code>picovave/sim/sim.c</code>)다.<br>
-  <b>처음 아무 곳이나 클릭(또는 키 입력)</b>하면 워클릿(오디오 클럭)에서 실행된다. <b>SOUND</b> 는 음소거 토글. 마우스/터치: 패드(shift = 약하게), 건반, 노브(위/아래 드래그·휠), 버튼, 휠, 페이더. 컴퓨터 키보드:
-  <code>1..8</code> = 패드(picovave 에서는 버튼 6..13), <code>A W S E D F T G Y H U J K</code> = 건반,
-  <code>Z / X</code> = 옥타브. <b>POWER-ON</b> 은 설치된 앱을 다시 켜고, <b>TICK</b> 은 무음 실행에서 루프를 한 바퀴 더 돈다.<br>
-  <b>DEVICE</b> 상자에는 두 가지가 있다. <b>SIMULATOR</b> 는 빌드를 웹에서 바로 적용한다 — <code>.fwsc</code>를
-  검증하고(헤더/파일목록/flash.bin CRC) 그 <b>flash 바이트 모델</b>에 쓴 뒤, 같은 소스에서 빌드된 wasm 을 실행해
-  화면이 뜬다. <b>FLASH(USB)</b> 는 진짜로 쓴다 — <code>fm1ota.mjs</code>(<code>picovave/platform/tools/fm1_install.py</code> 의
-  Web MIDI 이식)가 USB-MIDI SysEx 로 연결된 SMK-37 Pro 에 패키지를 보내고, 기기가 스스로 설치·재부팅한다. 순정
-  v016 같은 <b>복원</b>은 SIMULATOR 로는 실행할 수 없어 "실기 전용"으로 표시되지만, FLASH(USB) 로는 쓸 수 있다
-  (브라우저는 pi32v2 기계어를 실행하지 못한다). FLASH(USB) 는 Chrome(https/localhost)과 사용자의 MIDI 권한이 필요하고,
-  기기를 자동으로 못 찾으면 <b>MIDI 포트 진단</b>이 모든 MIDI 포트에 handshake 를 질의해 어느 포트가 응답하는지
-  보여주고, 응답한 포트를 선택 상자에 골라 준다(실기 SMK-37 Pro 는 포트가 여러 개일 수 있다).<br>
-  <b>카트(.p8.png)</b> 는 두 곳 중 하나로 넣는다 — 선택 상자로 고르고, 각 버튼이 어디로 가는지 말한다.
-  <b>SIMULATOR</b> 는 웹 wasm 안의 저장소에 넣고(브라우저가 곧 기기), <b>FLASH(USB)</b> 는 연결된 <b>실기</b>의
-  SLOOP 스토어에 쓴다. 어느 쪽이든 <b>같은 프레임</b>(BEGIN/DATA/END + CRC16)을 쓰고, 7비트 SysEx에 싣기 위해
-  페이로드를 <b>8비트→7비트로 분할</b>한다(패키지 프로토콜과 같은 방식). 카트는 <b><code>.p8.png</code> 하나만</b> —
-  PICO-8 이 저장하고 배포하는 그 형식이다. 브라우저가 이미지를 풀어(160×205 픽셀의 하위 2비트가 곧 카트다)
-  <b>쿠킹된 카트</b>(ROM 17,152 B + 코드 15,648 B, 마법 4 B)를 보내고, 기기는 그 코드만 편다 — 기기에서 PNG 를
-  해독하려면 RGBA 131,200 B 가 필요한데, 그때는 기기의 풀 전체가 22,016 B 였다. 기기는 femto8 이 이미 가진 코드
-  해제기(PXA · <code>:c:</code> · 구형 raw)를 쓰고, 받는 파서는 펌웨어 자신의 것(<code>src/picovave_cart.h</code>)이라
-  시뮬레이터에서 통한 업로드가 실기에서도 그대로 통한다. 커밋되면 그 카트로 곧바로 다시 부팅하고(칩 리셋이 아니라
-  실행만 다시 시작), 슬롯에 남아 POWER-ON 뒤에도 다시 뜬다. 텍스트 <code>.p8</code> 은 받지 않는다(작성자가 저장한
-  압축 카트보다 2~3배 커서 슬롯에 들어가지 않고, 형식이 둘이면 헷갈린다). 카트를 고르면 올리기 <b>전에</b> 임시
-  wasm 에서 그 카트를 <b>기기의 아레나 그대로</b>(기기 allocator·같은 풀 크기) 실제로 돌려 <b>기기에서 실행되는지</b>를
-  실측해 알려준다 — 아예 실행되지 않으면 <b>기기 불가</b>, 가끔 할당이 거부되면 <b>기기 빠듯</b>(GC 히치),
-  자주 거부되면 <b>기기 불가(끊김)</b>으로 표시되고, 이때는 실기로 올리기 전에 한 번 더 확인한다
-  (시뮬레이터에서는 그대로 잘 돈다).
-</div>
+      <div class="prog"><div class="bar" id="progbar"><i></i></div><span id="progtext">대기</span></div>
+
+      <div class="ctl">
+        <button id="simPicovave" class="on">SIMULATOR picovave.fwsc</button>
+        <label id="drop">원복용 .fwsc 선택 / 끌어다 놓기<input type="file" id="v016" accept=".fwsc"></label>
+        <button id="simRestore" class="ghost">SIMULATOR 복원</button>
+        <a id="dlPicovave" class="ghost" href="./picovave.fwsc" download>picovave.fwsc 내려받기</a>
+      </div>
+
+      <div class="ctl">
+        <button id="flashPicovave" class="danger">FLASH(USB) picovave.fwsc</button>
+        <button id="flashRestore" class="ghost">FLASH(USB) 복원</button>
+        <select id="midiport" title="FLASH(USB) 가 쓸 MIDI 포트"></select>
+        <button id="midiscan" class="ghost">MIDI 포트 진단</button>
+      </div>
+
+      <div class="ctl">
+        <label id="cartdrop">카트 <code>.p8.png</code> 선택 / 끌어다 놓기<input type="file" id="cartp8" accept=".p8.png"></label>
+        <select id="cartmode" title="카트를 넣을 곳">
+          <option value="sim">SIMULATOR (웹 wasm 저장소)</option>
+          <option value="usb">FLASH(USB) (실기 SLOOP)</option>
+        </select>
+        <button id="cartSend" class="pri">SIMULATOR 카트(.p8.png) 업로드</button>
+        <button id="cartErase" class="ghost">SIMULATOR 슬롯 비우기</button>
+      </div>
+      <b id="cartsay">-</b>
+
+      <pre id="pkg">패키지 확인 중…</pre>
+      <pre id="flashlog"></pre>
+    </div>
+  </details>
+
+  <!-- only when opened: the manual -->
+  <details class="box" id="helpbox">
+    <summary>도움말 · 키 매핑</summary>
+    <div class="body help">
+      패널은 SMK-37 Pro 그대로 — 휠(PITCH·MOD) · 화면과 그 아래 6버튼 · K1..K8 과 16 패드 ·
+      페이더와 2×6 버튼 · 건반 — 이고, picovave 가 <b>PICO-8 카트</b>를 실행한다.<br>
+      <b>처음 아무 곳이나 클릭</b>하면 오디오 클럭(워클릿)에서 실행된다. 마우스/터치: 패드(shift = 약하게),
+      건반, 노브(위/아래 드래그), 버튼, 휠, 페이더. 컴퓨터 키보드:
+      <code>1..8</code> 패드 · <code>A W S E D F T G Y H U J K</code> 건반 · <code>Z / X</code> 옥타브.<br>
+      <b>POWER-ON</b> 은 설치된 앱을 다시 켜고, <b>TICK</b> 은 무음 실행에서 루프를 한 바퀴 더 돈다.
+      <b>SOUND</b> 는 음소거 토글.<br>
+      <b>SIMULATOR</b> 는 빌드를 웹에 바로 적용하고(같은 소스의 wasm 이 곧 기기다),
+      <b>FLASH(USB)</b> 는 연결된 실기에 쓴다 — Chrome(https/localhost)과 MIDI 권한이 필요하고,
+      기기를 못 찾으면 <b>MIDI 포트 진단</b>이 어느 포트가 응답하는지 알려준다.<br>
+      <b>카트</b>는 <code>.p8.png</code> 하나만 받는다. 올리기 전에 기기의 아레나·allocator 그대로
+      실제로 돌려 <b>기기에서 실행되는지</b>를 재고(빠듯하면 확인을 받는다), 커밋되면 그 카트로 다시 부팅한다.
+    </div>
+  </details>
+</main>
 
 <script type="module">
 import { toRGBA, W, H } from "./picovave_render.js";
@@ -276,7 +312,7 @@ function warn(msg) { status.textContent = msg; status.className = "warn"; }
 // foreign ROM (the stock v016) is never mistaken for ours.
 const FW = {
   picovave: { label: "PICOVAVE", wasm: "./sim.wasm", pkg: "./picovave.fwsc",
-           moto: 'SMK-37 Pro · PICO-8 · <code>picovave_p8.h</code> is the firmware\'s own source' },
+           moto: 'SMK-37 Pro · PICO-8' },
 };
 
 // Cache-busting. hello and picovave were once served from the same URL (localhost:PORT/sim.wasm,
@@ -468,7 +504,7 @@ function makeButton(b, parent) {
 [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].forEach((b) => makeButton(b, $("grid6")));   // under the faders, 2 x 6
 
 // ---- K1..K8 (HAL encoders 0..7), each over its pad column ----
-const KC = ["#ff4040", "#ff9614", "#ffe61e", "#46e646", "#14dcff", "#4678ff", "#aa5aff", "#ff5ad2"];
+const KC = ["#FF004D", "#FFA300", "#FFEC27", "#00E436", "#29ADFF", "#83769C", "#FF77A8", "#FFCCAA"];
 for (let e = 0; e < 8; e++) {
   const k = mk("knob", `<div class="dial"></div><b>K${e + 1}</b>`);
   k.id = "knob" + e;
@@ -488,7 +524,7 @@ const padEl = [];
 for (let p = 0; p < 16; p++) {
   const el = mk("pad", `<i>${p < 8 ? p + 1 : ["KB", "", "", "", "", "P", "H", "C"][p - 8]}</i>`);
   el.id = "pad" + p;
-  el.style.setProperty("--c", KC[p & 7] + "88");
+  el.style.setProperty("--c", KC[p & 7]);
   el.addEventListener("pointerdown", (ev) => { if (el.setPointerCapture && ev.pointerId !== undefined) el.setPointerCapture(ev.pointerId); el.classList.add("down"); send({ type: "pad", pad: p, vel: ev.shiftKey ? 40 : 110 }); });
   el.addEventListener("pointerup", () => { el.classList.remove("down"); send({ type: "pad", pad: p, vel: 0 }); });
   el.addEventListener("pointercancel", () => { el.classList.remove("down"); send({ type: "pad", pad: p, vel: 0 }); });
@@ -616,7 +652,28 @@ function renderDevice() {
   $("devprot").textContent = PROTECTED.map((p) => p[1]).join(" ");
 }
 
-function showLog(lines) { $("flashlog").textContent = lines.join("\n"); }
+function showLog(lines) {
+  const el = $("flashlog");
+  el.textContent = lines.join("\n");
+  el.scrollTop = el.scrollHeight;            // a log that does not follow its own tail is unreadable
+}
+
+/* One bar for everything that takes time. pct === null means "working, no total yet": the fill
+ * slides. Any operation that reports progress also opens the DEVICE box, so the bar is visible
+ * while it runs instead of behind a closed summary. */
+function setProgress(pct, text) {
+  const bar = $("progbar");
+  if (bar) {
+    const fill = bar.firstChild;
+    if (fill && fill.style) fill.style.width = (pct == null ? 0 : Math.max(0, Math.min(100, pct))) + "%";
+    if (bar.classList) bar.classList.toggle("indet", pct == null);
+  }
+  if (text != null) {
+    $("progtext").textContent = text;
+    const box = $("devbox");
+    if (box) box.open = true;
+  }
+}
 
 function renderPkg(pkg, name) {
   const h = pkg.header, lines = [
@@ -659,6 +716,7 @@ function simulate(pkg, label, target) {
   runFirmware();
   log.push(`  재부팅 → ${fw ? FW[fw].label + " wasm (같은 소스) 실행" : "실기 전용 ROM, 브라우저 실행 불가"}`);
   showLog(log);
+  setProgress(100, `설치 완료 · 0x${wrote.toString(16)} B`);
   return true;
 }
 
@@ -735,6 +793,7 @@ async function flashUsb(raw, label, force) {
     fail("이 브라우저에는 Web MIDI 가 없다"); return;
   }
   flashing = true;
+  setProgress(null, "MIDI 연결 중…");
   try {
     say("  MIDI 권한 요청 중… (주소창 알림을 허용)");
     const backend = await WebMidiBackend.request();
@@ -772,15 +831,26 @@ async function flashUsb(raw, label, force) {
     let last = "";
     const emit = (s) => { if (s !== last) { last = s; say(s); } };
     const step = (k, a) => {
-      if (k === "check") emit(`  패키지 확인 중… ${Math.ceil(a / 50) * 50} reads`);
-      else if (k === "write") emit(`  쓰는 중 ${a}%`);
-      else emit("  " + ({ start: `업데이트 시작 (${a})`, loader: "업데이트 로더로 전환", reboot: "재시작 대기", done: `완료: ${a}` }[k] || k));
+      if (k === "check") {
+        const reads = Math.ceil(a / 50) * 50;
+        setProgress(null, `확인 중 · ${reads} reads`);
+        emit(`  패키지 확인 중… ${reads} reads`);
+      } else if (k === "write") {
+        setProgress(a, `쓰는 중 ${a}%`);
+        emit(`  쓰는 중 ${a}%`);
+      } else {
+        const t = { start: `업데이트 시작 (${a})`, loader: "업데이트 로더로 전환",
+                    reboot: "재시작 대기", done: `완료: ${a}` }[k] || k;
+        setProgress(k === "done" ? 100 : null, t);
+        emit("  " + t);
+      }
     };
     const back = await up.install(dev, pack.image, pack.product, step);
     say(`  ✓ 기기가 ${back} 을 실행한다`);
     ok(`FLASH(USB) 완료 · ${back}`);
   } catch (e) {
     say("  " + ((e && e.message) || e));
+    setProgress(0, "실패");
     fail("FLASH(USB) 실패: " + ((e && e.message) || e));
   } finally {
     flashing = false;
@@ -1161,7 +1231,9 @@ function uploadCartSim(d) {
   const log = [`SIMULATOR 카트 · ${cartName} · ${d.length} B · 슬롯 ${slot} · ` +
                `${msgs.length} 프레임 (BEGIN + DATA×${msgs.length - 2} + END)`];
   let last = null;
+  setProgress(0, `프레임 0/${msgs.length}`);
   for (const m of msgs) { const res = r.sysex(m); if (res) last = res; }
+  setProgress(100, `프레임 ${msgs.length}/${msgs.length}`);
   if (last) {
     log.push(`  → ${replyText(last)} · 활성 슬롯 ${last.active}`);
     log.push("  장치의 SysEx 프로토콜(src/picovave_cart.h)이 파싱 · 커밋되면 그 카트로 재부팅한다");
@@ -1211,7 +1283,9 @@ async function cartUsbLink(say) {
 /* Send frames one at a time and read each answer; throw on the first ERR or silence. */
 async function cartUsbSend(dev, msgs, say) {
   let last = null;
+  setProgress(0, `프레임 0/${msgs.length}`);
   for (let i = 0; i < msgs.length; i++) {
+    setProgress(((i + 1) / msgs.length) * 100, `프레임 ${i + 1}/${msgs.length}`);
     if (!dev.link.send(msgs[i])) throw new InstallError("lost", "기기가 끊겼다");
     last = await cartReply(dev.link, 800);            // the device answers every frame
     if (!last) throw new InstallError("silent", `프레임 ${i + 1}/${msgs.length} 에 응답이 없다`);
@@ -1293,6 +1367,7 @@ function eraseCart() {
   if (cartTarget === "usb") return eraseCartUsb();
   const res = runner().sysex(cartFrame(0x05, [0]));   // the one slot: back to the embedded cart
   $("cartsay").textContent = "슬롯 비움 → 기본 카트 (웹)";
+  setProgress(100, "슬롯 비움");
   ok("SIMULATOR 슬롯 비우기 → 기본 카트 (" + replyText(res) + ")");
 }
 
