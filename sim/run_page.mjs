@@ -53,8 +53,10 @@ function makeStyle() {
 }
 
 function makeEl(id) {
+  /* A real class list: the page lights a pad, a key or a button by putting "down"/"lit" on it,
+   * so a test that presses something has to be able to see what it lit. */
+  const classes = new Set();
   const el = {
-    id: id,
     textContent: "",
     innerHTML: "",
     className: "",
@@ -63,8 +65,13 @@ function makeEl(id) {
     height: 240,
     style: makeStyle(),
     classList: {
-      toggle: function () {}, add: function () {}, remove: function () {},
-      contains: function () { return false; }
+      toggle: function (c, on) {
+        if (on === undefined) { if (classes.has(c)) classes.delete(c); else classes.add(c); }
+        else if (on) classes.add(c); else classes.delete(c);
+        return classes.has(c);
+      },
+      add: function (c) { classes.add(c); }, remove: function (c) { classes.delete(c); },
+      contains: function (c) { return classes.has(c); }
     },
     // keyed by the element's CURRENT id, so a created element that sets el.id in the page
     // (buttons "btn6", pads "pad0", keys "key12", ...) can be fired from a test.
@@ -90,6 +97,14 @@ function makeEl(id) {
     }
   };
   el.firstChild = { style: makeStyle() };          /* the knobs poke at their dial */
+  /* The page names its panel elements as it builds them (btn6, pad0, key12, ...). Keep the
+   * registry keyed by the CURRENT id, so a test can read what a pad was given and what it lights. */
+  let current = id;
+  Object.defineProperty(el, "id", {
+    get: function () { return current; },
+    set: function (v) { if (listeners[current]) listeners[v] = listeners[current]; current = v; elements[v] = el; },
+    configurable: true, enumerable: true
+  });
   elements[id] = el;
   return el;
 }
@@ -397,6 +412,92 @@ try {
   }
 } catch (e) {
   check("FLASH(USB) path works", false, String((e && e.message) || e));
+}
+
+/* ---- the PC keyboard, and what the page prints on the panel ----
+ * Both halves of one promise, and both come from src/picovave_p8.h's pv_gamepad(): a pad or a
+ * keybed key carries a PICO-8 control written on it ONLY because the firmware reads that input for
+ * that control, and PICO-8's own default PC keys (the arrows, Z, X, ESC, ENTER) drive exactly
+ * those inputs - so the label printed on a pad is also the key to press for it. The bit numbers
+ * here are read off pv_gamepad(): pads 1/8/9/10 for the D-pad, 15/14 for ⬥/❎ and 12/13 for
+ * ⬜/🌵, the low keys 5/7 8/10 9 11/12 for the same D-pad, and key 31 / key 32 (lo bit 31) and
+ * key 33 / key 36 (hi bit 1 / bit 4) for ⬜ / 🌵 / ⬥ / ❎.
+ * ⬥ and ❎ are the engine's own two action buttons: p8_input.h BUTTON_ACTION1 (femto8's p8_lua.c
+ * names glyph 142 "O/Z") and BUTTON_ACTION2 (glyph 151, "X") - which is why Z goes with ⬥.
+ * ⬜ and 🌵 are PICO-8's other two. 🌵 reaches a cart as its own Start (p8_input.c maps it to
+ * BUTTON_MASK_PAUSE, which btn() hands out as btn(6)); ⬜ is not a cart button - p8_emu.c's
+ * p8_check_for_pause() aborts the running cart and the harness re-begins it. sim_test.mjs drives
+ * both through the real engine. */
+try {
+  const P8 = [
+    // pc key      the panel input it drives   the label the page must print there
+    ["ArrowUp",    "pad1",  "<i>↑</i>"],
+    ["ArrowLeft",  "pad8",  "<i>←</i>"],
+    ["ArrowDown",  "pad9",  "<i>↓</i>"],
+    ["ArrowRight", "pad10", "<i>→</i>"],
+    ["z",          "pad15", "<i><b>⬥</b>Z</i>"],
+    ["x",          "pad14", "<i><b>❎</b>X</i>"],
+    ["Escape",     "pad12", "<i><b>⬜</b>ESC</i>"],
+    ["Enter",      "pad13", "<i><b>🌵</b>⏎</i>"]
+  ];
+  let wrong = [];
+  for (const one of P8) {
+    const key = one[0], id = one[1], label = one[2], el = elements[id];
+    if (!el) { wrong.push(id + " was never built"); continue; }
+    if (el.innerHTML !== label) { wrong.push(id + " prints " + JSON.stringify(el.innerHTML)); continue; }
+    fireKey("keydown", key);
+    const down = el.classList.contains("down");
+    fireKey("keyup", key);
+    if (!down || el.classList.contains("down")) wrong.push(key + " does not hold " + id + " down and let it go");
+  }
+  check("PICO-8's default PC keys drive the pads that carry their labels", wrong.length === 0, wrong.join("; "));
+
+  wrong = [];
+  const onKeys = [["key5", "←"], ["key7", "←"], ["key8", "↑"], ["key10", "↑"], ["key9", "↓"],
+                  ["key11", "→"], ["key12", "→"], ["key31", "⬜"], ["key32", "🌵"],
+                  ["key33", "⬥"], ["key36", "❎"]];
+  for (const one of onKeys) {
+    const el = elements[one[0]];
+    if (!el || el.innerHTML !== "<i>" + one[1] + "</i>") wrong.push(one[0] + " prints " + JSON.stringify(el && el.innerHTML));
+  }
+  check("the keybed keys pv_gamepad() reads carry the same eight controls", wrong.length === 0, wrong.join("; "));
+
+  // A cart cannot read the rest of the panel, so the rest of it carries nothing: no pad numbers,
+  // no KB/P/H/C letters, no glyph on a key that does nothing.
+  const labelled = new Set(onKeys.map((o) => o[0]).concat(P8.map((o) => o[1])));
+  const bare = Object.keys(elements).filter(function (id) {
+    return /^(pad|key)\d+$/.test(id) && elements[id].innerHTML && !labelled.has(id);
+  });
+  check("no other pad or key carries a label", bare.length === 0, bare.join(" "));
+
+  // The keybed still plays, and its octave moved off z/x - those two are the cart's now.
+  fireKey("keydown", "a");
+  const octave12 = elements["key12"].classList.contains("down");
+  fireKey("keyup", "a");
+  fireKey("keydown", "z"); fireKey("keyup", "z");
+  fireKey("keydown", "a");
+  const zIsNotAnOctave = elements["key12"].classList.contains("down");
+  fireKey("keyup", "a");
+  fireKey("keydown", ",");
+  fireKey("keydown", "a");
+  const shifted = elements["key0"].classList.contains("down");
+  fireKey("keyup", "a");
+  fireKey("keydown", ".");
+  fireKey("keydown", "a");
+  const back = elements["key12"].classList.contains("down");
+  fireKey("keyup", "a");
+  check("A W S E plays the keybed and , / . shift its octave (z no longer does)",
+        octave12 && zIsNotAnOctave && shifted && back,
+        [octave12, zIsNotAnOctave, shifted, back].join("/"));
+
+  // 1..8 stay the eight buttons under the faders
+  fireKey("keydown", "1");
+  const btn6 = elements["btn6"].classList.contains("down");
+  fireKey("keyup", "1");
+  check("1..8 hold down the buttons under the faders and let go",
+        btn6 && !elements["btn6"].classList.contains("down"), "");
+} catch (e) {
+  check("the PC keyboard mapping works", false, String((e && e.message) || e));
 }
 
 console.log(fails ? "page: " + fails + " FAILED" : "page: all ok");

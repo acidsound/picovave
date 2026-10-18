@@ -422,6 +422,61 @@ if (fixtures.length) {
           Math.round(m.peak / 1024) + " KB peak, " + m.refused + " refusal(s), running " +
           cartOf(m.running));
   }
+
+  // -------------------------------------------------------------------------------------------
+  // ⬜ and 🌵 end to end, in a fresh instance so nothing above is disturbed. The panel inputs
+  // pv_gamepad() reads for them (pad 12 = ⬜, pad 13 = 🌵) have to cross the seam and reach the
+  // engine: 🌵 as PICO-8's own btn(6), ⬜ as the engine's abort, which this harness's setjmp
+  // answers by re-beginning the cart. The cart below shows its own age - PICO-8 dark blue for its
+  // first 40 frames, green after that, bright green while btn(6) is held - so a restart is the
+  // panel going back to the first colour, and Start is the third one.
+  const ctl = (await WebAssembly.instantiate(probeMod, imports)).exports;
+  if (ctl._initialize) ctl._initialize();
+  const cfeed = (m) => {
+    new Uint8Array(ctl.memory.buffer, ctl.sim_sysex_in(), m.length).set(m);
+    return ctl.sim_sysex(m.length);
+  };
+  const ctlCooked = cookedFromScript(
+    "function _init()\tn = 0\nend\nfunction _update()\tn += 1\nend\n" +
+    "function _draw()\n\tif (btn(6)) then cls(11) else cls(n < 40 and 1 or 3) end\nend\n");
+  const ctlCart = new Uint8Array(CART_LEN);
+  ctlCart.set(COOKED_MAGIC, 0);
+  ctlCart.set(ctlCooked, COOKED_MAGIC.length);
+  ctl.sim_init();                                     // POWER-ON
+  cfeed(frame(0x01, [0, ...le7(ctlCart.length, 3), nm("ctl.p8.png").length, ...nm("ctl.p8.png")]));
+  for (let off = 0; off < ctlCart.length; off += 128) {
+    const c = ctlCart.subarray(off, off + 128);
+    cfeed(frame(0x02, [...le7(off, 3), ...le7(c.length, 3), ...pack7(c)]));
+  }
+  cfeed(frame(0x03, le7(crc16(ctlCart), 3)));         // commit: the engine reboots onto it
+  const cfb = new Uint16Array(ctl.memory.buffer, ctl.sim_fb(), 240 * 240);
+  /* Read the panel's CENTRE, not its corner: the boot-stage readout (hh_boot_stage) is drawn
+   * over the top-left of the panel, so fb[0] is that overlay's colour whatever the cart draws. */
+  const PX = 120 * 240 + 120;
+  for (let i = 0; i < 6; i++) ctl.sim_frame();
+  const young = cfb[PX];                              // cls(1): the cart's first colour
+  for (let i = 0; i < 60; i++) ctl.sim_frame();
+  const aged = cfb[PX];                               // cls(3): it has been running past frame 40
+  check("the Start/menu test cart runs and repaints as it ages",
+        young !== 0 && aged !== young && ctl.sim_status() === 0,
+        "young=" + young + " aged=" + aged + " status=" + ctl.sim_status());
+  ctl.sim_pad(13, 127);                               // 🌵
+  for (let i = 0; i < 2; i++) ctl.sim_frame();
+  const startPx = cfb[PX];                            // cls(11) only if the cart read btn(6)
+  ctl.sim_pad(13, 0);
+  check("🌵 (pad 13) reaches a cart as PICO-8's btn(6)",
+        startPx !== aged && startPx !== young && startPx !== 0,
+        "aged=" + aged + " with 🌵 held=" + startPx);
+  for (let i = 0; i < 4; i++) ctl.sim_frame();       // and back to its age colour when let go
+  const agedAgain = cfb[PX];
+  ctl.sim_pad(12, 127);                               // ⬜
+  for (let i = 0; i < 3; i++) ctl.sim_frame();
+  ctl.sim_pad(12, 0);
+  for (let i = 0; i < 2; i++) ctl.sim_frame();
+  const restarted = cfb[PX];
+  check("⬜ (pad 12) reaches the engine and restarts the running cart",
+        agedAgain === aged && restarted === young,
+        "aged=" + aged + " after ⬜=" + restarted + " (first colour=" + young + ")");
 }
 
 // ---------------------------------------------------------------------------------------------

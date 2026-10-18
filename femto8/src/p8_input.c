@@ -447,6 +447,12 @@ void p8_update_input()
         mask |= BUTTON_MASK_ACTION1;
     if (gamepad & BUTTON_2)
         mask |= BUTTON_MASK_ACTION2;
+    if (gamepad & BUTTON_SELECT)
+        mask |= BUTTON_MASK_ESCAPE;   /* ⬜: p8_check_for_pause() aborts the cart, and the
+                                       * harness's setjmp re-begins it - a restart */
+    if (gamepad & BUTTON_START)
+        mask |= BUTTON_MASK_PAUSE;    /* 🌵: bit 6 of the mask btn() reads = PICO-8's btn(6).
+                                       * (p8_show_pause_menu() is a stub in this port.) */
 
     m_buttons[0] = mask;
 #endif

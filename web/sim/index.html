@@ -70,13 +70,13 @@
   #screen { width:240px; height:240px; image-rendering:pixelated; image-rendering:crisp-edges; display:block;
             border:2px solid var(--p0); border-radius:2px; background:var(--p0); }
   @media (min-width:1900px) { #screen { width:480px; height:480px; } main { max-width:1900px; } }
-  .nav { display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; }
+  /* the six buttons under the screen: 2 columns x 3 rows, as web/sim/ and repo/ lay them out */
+  .nav { display:grid; grid-template-columns:repeat(2, 1fr); gap:6px; }
 
   /* buttons: filled, not outlined */
   .btn { border:none; border-radius:3px; text-align:center; cursor:pointer; color:var(--fg);
          background:var(--p5); font:inherit; font-size:11px; font-weight:700; padding:6px 2px;
          min-height:40px; display:flex; flex-direction:column; justify-content:center; line-height:1.15; }
-  .btn small { display:block; color:var(--p6); font-size:10px; font-weight:400; }
   .btn.lit, .btn.down { background:var(--p8); color:var(--p7); }
 
   .mid { display:grid; grid-template-columns:repeat(8, 72px); row-gap:10px; }
@@ -88,13 +88,17 @@
                 transform:rotate(var(--a, 0deg)); }
   .knob b { font-size:11px; color:var(--p6); }
   /* pads: one solid grey like the buttons; the column's colour is the label, and the whole pad
-     takes that colour while it is held. Sixteen saturated rectangles would be a fairground. */
+     takes that colour while it is held. Sixteen saturated rectangles would be a fairground.
+     A pad only carries a label when the cart reads it: it is the PICO-8 control that pad IS,
+     printed in the middle of it. The other ten carry nothing, because they do nothing. */
   .pad { height:58px; margin:0 4px; border-radius:3px; background:#5F574F; cursor:pointer;
          position:relative; }
   .pad.down { background:var(--c, var(--p8)); }
   .pad.down i { color:var(--p0); }
-  .pad i { position:absolute; left:5px; top:3px; font-style:normal; color:var(--c, var(--p7));
-           font-size:11px; font-weight:700; }
+  .pad i { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+           justify-content:center; font-style:normal; font-weight:700; font-size:11px;
+           line-height:1.05; color:var(--c, var(--p7)); pointer-events:none; }
+  .pad i b { font-size:18px; font-weight:400; }        /* the PICO-8 glyph; the PC key under it */
 
   .rgt { display:flex; flex-direction:column; gap:8px; }
   .faders { display:flex; justify-content:space-around; }
@@ -105,12 +109,19 @@
      inset would walk them off the naturals. */
   .keys { position:relative; height:150px; display:flex; touch-action:none;
           background:var(--p5); border-radius:6px; padding:8px 0 0; }
-  .key { cursor:pointer; border-radius:0 0 3px 3px; }
+  .key { cursor:pointer; border-radius:0 0 3px 3px; position:relative; }
   .key.w { flex:1; margin:0; background:var(--p7); box-shadow:inset -1px 0 0 var(--p6), inset 0 -5px 0 var(--p6); }
   .key.b { position:absolute; top:8px; height:62%; background:var(--p0); z-index:2;
            box-shadow:inset 0 -4px 0 #333333; }
   .key.down.w { background:var(--p12); box-shadow:inset -1px 0 0 #1b6fa8, inset 0 -5px 0 #1b6fa8; }
   .key.down.b { background:var(--p8); }
+  /* the few keybed keys the cart reads carry the PICO-8 control they drive, on the key's own lip:
+     the same eight controls the pads carry, because pv_gamepad() answers for both. */
+  .key i { position:absolute; left:0; right:0; bottom:8px; text-align:center; font-style:normal;
+           font-size:11px; font-weight:700; color:var(--p13); pointer-events:none; }
+  .key.b i { bottom:auto; top:3px; color:var(--p6); }
+  .key.down.w i { color:var(--p0); }
+  .key.down.b i { color:var(--p7); }
 
   .ctl { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
   .ctl button, .ctl a, .ctl label, .ctl select {
@@ -129,14 +140,20 @@
   .ctl select { max-width:220px; }
   .ctl b { color:var(--dim); font-weight:600; font-size:12px; }
 
-  /* ---- only when opened ---- */
-  details.box { background:var(--panel); border:2px solid var(--p0); border-radius:8px; margin:12px 0; }
+  /* ---- boxes ----
+     The DEVICE box is a control panel, not a drawer: it is always on the page, so it is a plain
+     <section> with a heading — nothing to open, nothing that can hide a progress bar or a log.
+     Only the manual below folds, because it is reference rather than a control. */
+  .box { background:var(--panel); border:2px solid var(--p0); border-radius:8px; margin:12px 0; }
+  .box > h2 { margin:0; padding:10px 14px; color:var(--p10); font-weight:700; letter-spacing:1px;
+              font-size:13px; }
+  .box > .body { padding:0 14px 14px; display:flex; flex-direction:column; gap:10px; }
   details.box > summary { cursor:pointer; padding:10px 14px; color:var(--p10); font-weight:700;
                           letter-spacing:1px; list-style:none; }
   details.box > summary::-webkit-details-marker { display:none; }
   details.box > summary::before { content:"\25B8 "; color:var(--p13); }
   details.box[open] > summary::before { content:"\25BE "; }
-  details.box .body { padding:0 14px 14px; display:flex; flex-direction:column; gap:10px; }
+  details.box > .body { padding:0 14px 14px; display:flex; flex-direction:column; gap:10px; }
 
   details.stats { margin-left:auto; }
   details.stats > summary { cursor:pointer; color:var(--p6); list-style:none; font-size:12px; }
@@ -214,9 +231,9 @@
     </div>
   </section>
 
-  <!-- only when opened: install, flash, carts, the log -->
-  <details class="box" id="devbox">
-    <summary>DEVICE · 플래시 / 카트</summary>
+  <!-- always visible, never folded: install, flash, carts, the log -->
+  <section class="box" id="devbox">
+    <h2>DEVICE · 플래시 / 카트</h2>
     <div class="body">
       <div class="devrow">
         <span>설치된 앱 <b id="device">PICOVAVE</b></span>
@@ -256,7 +273,7 @@
       <pre id="pkg">패키지 확인 중…</pre>
       <pre id="flashlog"></pre>
     </div>
-  </details>
+  </section>
 
   <!-- only when opened: the manual -->
   <details class="box" id="helpbox">
@@ -265,8 +282,23 @@
       패널은 SMK-37 Pro 그대로 — 휠(PITCH·MOD) · 화면과 그 아래 6버튼 · K1..K8 과 16 패드 ·
       페이더와 2×6 버튼 · 건반 — 이고, picovave 가 <b>PICO-8 카트</b>를 실행한다.<br>
       <b>처음 아무 곳이나 클릭</b>하면 오디오 클럭(워클릿)에서 실행된다. 마우스/터치: 패드(shift = 약하게),
-      건반, 노브(위/아래 드래그), 버튼, 휠, 페이더. 컴퓨터 키보드:
-      <code>1..8</code> 패드 · <code>A W S E D F T G Y H U J K</code> 건반 · <code>Z / X</code> 옥타브.<br>
+      건반, 노브(위/아래 드래그), 버튼, 휠, 페이더.<br>
+      <b>PICO-8 조작</b>은 여덟 개다 — 카트가 읽는 여섯 개(<code>↑ ← ↓ →</code> 방향패드 ·
+      <code>⬥</code>(Z) · <code>❎</code>(X)) · <code>🌵</code>(Start — 카트가 <code>btn(6)</code>으로 읽는다) ·
+      <code>⬜</code>(엔진이 직접 처리: 실행 중인 카트를 다시 시작). 여덟 개 모두 <b>패드에 적어둔 그대로</b>다.
+      같은 여덟 개가 건반에도
+      있다 — 가장 낮은 옥타브의 <code>F G</code>=← · <code>G# A#</code>=↑ · <code>A</code>=↓ ·
+      <code>B C</code>=→, 그리고 맨 위 옥타브의 <code>G</code>=⬜ · <code>G#</code>=🌵 ·
+      <code>A</code>=⬥ · 맨 위의 <code>C</code>=❎.
+      (고정은 아니다: <code>src/picovave_p8.h</code> 의 <code>pv_gamepad()</code> 가 그 답이다.)<br>
+      컴퓨터 키보드는 <b>PICO-8 기본키 그대로</b> 매핑된다 — <code>방향키</code>=방향패드 ·
+      <code>Z</code>=⬥ · <code>X</code>=❎ · <code>ENTER</code>=🌵 · <code>ESC</code>=⬜. 패널에 적힌
+      그 패드를 직접 누르는 것과 같은 입력이다(눌린 패드도 같이 켜진다). 🌵 은 PICO-8 의 Start 그
+      자체로 카트에 도착하고(<code>btn(6)</code>), ⬜ 은 카트가 읽는 버튼이 아니라 엔진이 처리한다 —
+      실행 중인 카트를 abort 하고 그 카트를 다시 시작시킨다(<code>femto8/src/p8_emu.c</code> 의
+      <code>p8_check_for_pause()</code>).<br>
+      악기로서: <code>A W S E D F T G Y H U J K</code> 건반 · <code>, / .</code> 옥타브 ·
+      <code>1..8</code> 페이더 아래 2×6 버튼판의 첫 여덟 개.<br>
       <b>POWER-ON</b> 은 설치된 앱을 다시 켜고, <b>TICK</b> 은 무음 실행에서 루프를 한 바퀴 더 돈다.
       <b>SOUND</b> 는 음소거 토글.<br>
       <b>SIMULATOR</b> 는 빌드를 웹에 바로 적용하고(같은 소스의 wasm 이 곧 기기다),
@@ -433,7 +465,11 @@ function frame(m) {
     const k = Math.min(5, 255 / Math.max(1, r, g, b));          // LEDs are dim: shown brighter here
     r = Math.round(r * k); g = Math.round(g * k); b = Math.round(b * k);
     const lit = Math.max(r, g, b) > 40, col = `rgb(${r},${g},${b})`;
-    el.style.background = lit ? col : "#000";
+    /* A pad whose LED is off is not a black square: picovave lights no pad LEDs at all, so an
+     * inline background here would hide the pad's own state — grey at rest, its column's colour
+     * while it is held — and a press you cannot see is a key you cannot find. Only an LED that
+     * is actually lit paints over the pad. */
+    el.style.background = lit ? col : "";
     el.style.borderColor = lit ? col : "";
     el.style.boxShadow = lit ? `0 0 16px ${col}` : "";
   });
@@ -485,18 +521,21 @@ function send(m) {
   if (runner().kind === "mt") stats();
 }
 
-// ---- the 18 buttons (HAL ids): SMK name, and what they do on the SMK-37 Pro ----
-const BTN = [["KNOB BANK", "PRESETS · held HELP"], ["FADER BANK", "faders"], ["<", "page"], [">", "page"],
-  ["OCTAVE-", "transpose"], ["OCTAVE+", "transpose"], ["ARP", "KEYS"], ["NOTE REPEAT", "MOTION"], ["SCALE", "TUNING"],
-  ["CHORD", "ENVELOPE"], ["GLOBE", "MIX"], ["BT", "-"], ["PATCH", "HOME"], ["PARA", "SOUND"],
-  ["FX", "EFFECTS"], ["SEQ", "SEQUENCER"], ["SEQ PLAY", "FREE-PLAY"], ["SEQ REC", "HOLD"]];
+// ---- the 18 buttons (HAL ids): the name printed on the SMK-37 Pro, nothing else ----
+const BTN = ["KNOB BANK", "FADER BANK", "<", ">", "OCTAVE-", "OCTAVE+", "ARP", "NOTE REPEAT", "SCALE",
+  "CHORD", "GLOBE", "BT", "PATCH", "PARA", "FX", "SEQ", "SEQ PLAY", "SEQ REC"];
 const btnEl = [];
+function buttonHold(b, down) {
+  const el = btnEl[b];
+  if (el) el.classList.toggle("down", !!down);
+  send({ type: "button", b, down: down ? 1 : 0 });
+}
 function makeButton(b, parent) {
-  const el = mk("btn", `${BTN[b][0]}<small>${BTN[b][1]}</small>`);
+  const el = mk("btn", BTN[b]);
   el.id = "btn" + b;
-  el.addEventListener("pointerdown", (ev) => { if (el.setPointerCapture && ev.pointerId !== undefined) el.setPointerCapture(ev.pointerId); el.classList.add("down"); send({ type: "button", b, down: 1 }); });
-  el.addEventListener("pointerup", () => { el.classList.remove("down"); send({ type: "button", b, down: 0 }); });
-  el.addEventListener("pointercancel", () => { el.classList.remove("down"); send({ type: "button", b, down: 0 }); });
+  el.addEventListener("pointerdown", (ev) => { if (el.setPointerCapture && ev.pointerId !== undefined) el.setPointerCapture(ev.pointerId); buttonHold(b, 1); });
+  el.addEventListener("pointerup", () => buttonHold(b, 0));
+  el.addEventListener("pointercancel", () => buttonHold(b, 0));
   btnEl[b] = el;
   parent.appendChild(el);
 }
@@ -519,15 +558,29 @@ for (let e = 0; e < 8; e++) {
   $("mid").appendChild(k);
 }
 
-// ---- the 16 pads: hardware 0..7 top row, 8..15 bottom row (KB, P, H, C) ----
+/* ---- the 16 pads: hardware 0..7 top row, 8..15 bottom row ----
+ * What a pad does to a cart is not the page's invention. src/picovave_p8.h's pv_gamepad() is the
+ * only thing that turns this panel into PICO-8 input, and it reads eight pads: 1/8/9/10 for the
+ * D-pad, 15/14 for ⬥/❎ and 12/13 for ⬜/🌵 - the same eight it also takes from the keybed (see
+ * P8_KEYBED below). Those eight carry the PICO-8 control they are; the other eight carry nothing,
+ * because to a cart they are nothing. PICO-8's own default keys (the arrows, Z, X, ESC, ENTER)
+ * come in on the PC keyboard as exactly these pads, so the label on a pad is also the key to
+ * press for it. */
+const P8_PAD = { 1: "↑", 8: "←", 9: "↓", 10: "→", 15: "<b>⬥</b>Z", 14: "<b>❎</b>X",
+                 12: "<b>⬜</b>ESC", 13: "<b>🌵</b>⏎" };
 const padEl = [];
+function padHold(p, down, vel) {
+  const el = padEl[p];
+  if (el) el.classList.toggle("down", !!down);
+  send({ type: "pad", pad: p, vel: down ? (vel || 110) : 0 });
+}
 for (let p = 0; p < 16; p++) {
-  const el = mk("pad", `<i>${p < 8 ? p + 1 : ["KB", "", "", "", "", "P", "H", "C"][p - 8]}</i>`);
+  const el = mk("pad", P8_PAD[p] ? `<i>${P8_PAD[p]}</i>` : "");
   el.id = "pad" + p;
   el.style.setProperty("--c", KC[p & 7]);
-  el.addEventListener("pointerdown", (ev) => { if (el.setPointerCapture && ev.pointerId !== undefined) el.setPointerCapture(ev.pointerId); el.classList.add("down"); send({ type: "pad", pad: p, vel: ev.shiftKey ? 40 : 110 }); });
-  el.addEventListener("pointerup", () => { el.classList.remove("down"); send({ type: "pad", pad: p, vel: 0 }); });
-  el.addEventListener("pointercancel", () => { el.classList.remove("down"); send({ type: "pad", pad: p, vel: 0 }); });
+  el.addEventListener("pointerdown", (ev) => { if (el.setPointerCapture && ev.pointerId !== undefined) el.setPointerCapture(ev.pointerId); padHold(p, 1, ev.shiftKey ? 40 : 110); });
+  el.addEventListener("pointerup", () => padHold(p, 0));
+  el.addEventListener("pointercancel", () => padHold(p, 0));
   padEl[p] = el;
   $("mid").appendChild(el);
 }
@@ -568,12 +621,20 @@ mod.type = "range"; mod.min = "0"; mod.max = "130"; mod.value = "0"; mod.classNa
 mod.addEventListener("input", (ev) => send({ type: "wheel", i: 1, raw: 615 - +ev.target.value }));
 $("wheels").appendChild(mod); $("wheels").appendChild(mk("lab", "MOD"));
 
-// ---- the 37 keys, C..C, across the full width (black keys placed in % of it) ----
+/* ---- the 37 keys, C..C, across the full width (black keys placed in % of it) ----
+ * The keybed's share of the cart controls comes from the same pv_gamepad(): the low keys are the
+ * D-pad and the top octave's G G# A and the top C are ⬜ / 🌵 / ⬥ / ❎. Key 0 is the lowest C, so
+ * its high half is bit 32 and up: lo bit 31 = key 31, hi bit 0 = key 32, hi bit 1 = key 33,
+ * hi bit 4 = key 36. They are printed on the keys, because that is where a player looks to find
+ * them; the rest of the keybed is a keybed and carries nothing. */
+const P8_KEYBED = { 5: "←", 7: "←", 8: "↑", 9: "↓", 10: "↑", 11: "→", 12: "→",
+                    31: "⬜", 32: "🌵", 33: "⬥", 36: "❎" };
 const keyEl = [], WHITE = [0, 2, 4, 5, 7, 9, 11];
 let wx = 0;
 for (let k = 0; k < 37; k++) {
   const white = WHITE.includes(k % 12), el = mk("key " + (white ? "w" : "b"));
   el.id = "key" + k;
+  if (P8_KEYBED[k]) el.innerHTML = `<i>${P8_KEYBED[k]}</i>`;
   if (white) wx++;
   else { el.style.left = (wx / 22 - 0.31 / 22) * 100 + "%"; el.style.width = 0.62 / 22 * 100 + "%"; }
   el.addEventListener("pointerdown", (ev) => { if (el.setPointerCapture && ev.pointerId !== undefined) el.setPointerCapture(ev.pointerId); keyDown(k, 1); });
@@ -584,26 +645,45 @@ for (let k = 0; k < 37; k++) {
 }
 function keyDown(k, d) { if (keyEl[k]) keyEl[k].classList.toggle("down", !!d); send({ type: "key", key: k, down: d }); }
 
-// ---- computer keyboard: a..k = keys, z / x = octave, 1..8 = pads (buttons on picovave) ----
-const KB = "awsedftgyhujk", held = {};
-let kbo = 12;
+/* ---- the computer keyboard ----
+ * PICO-8's own default control keys, mapped onto the PC keyboard: the arrows ARE the D-pad,
+ * Z / X ARE ⬥ / ❎ and ESC / ENTER ARE ⬜ / 🌵. They arrive as what the instrument itself would
+ * deliver - the pads P8_PAD names, the ones pv_gamepad() reads for those controls - so an arrow
+ * key lights the pad it drives and the cart cannot tell a PC key from a pad hit.
+ * A W S E ... still plays the keybed. The octave shift is the page transposing the keybed, not
+ * anything PICO-8 knows, so with Z and X given to the cart it moves to , and . .
+ * ⬜ and 🌵 are PICO-8's other two. 🌵 arrives as PICO-8's own Start: p8_input.c turns it into
+ * BUTTON_MASK_PAUSE, which a cart reads as btn(6). ⬜ is not a cart button - p8_emu.c's
+ * p8_check_for_pause() aborts the running cart and the harness re-begins it. */
+const KB = "awsedftgyhujk";
+const P8_PCKEY = { arrowup: 1, arrowleft: 8, arrowdown: 9, arrowright: 10, z: 15, x: 14,
+                   escape: 12, enter: 13 };
+const held = {};                       // pc key -> the panel input it is holding down
+let kbo = 12;                          // the keybed's octave: a page-side transposition
 addEventListener("keydown", (ev) => {
   if (ev.repeat || ev.ctrlKey || ev.metaKey) return;
+  const t = ev.target && ev.target.tagName;
+  if (t === "INPUT" || t === "SELECT" || t === "TEXTAREA") return;   // a focused control keeps its keys
   const c = ev.key.toLowerCase(), i = KB.indexOf(c);
-  if (i >= 0 && kbo + i < 37) { held[c] = kbo + i; keyDown(kbo + i, 1); }
-  else if (c === "z") kbo = Math.max(0, kbo - 12);
-  else if (c === "x") kbo = Math.min(24, kbo + 12);
-  else if (c >= "1" && c <= "8") {
-    if (fw === "picovave") { held[c] = -(6 + (+c - 1)); send({ type: "button", b: 6 + (+c - 1), down: 1 }); }
-    else { held[c] = 100 + (+c - 1); send({ type: "pad", pad: +c - 1, vel: 110 }); }
+  if (P8_PCKEY[c] !== undefined) {
+    if (ev.preventDefault) ev.preventDefault();          // the arrows would scroll the page instead
+    held[c] = { t: "pad", n: P8_PCKEY[c] };
+    padHold(P8_PCKEY[c], 1);
+  }
+  else if (i >= 0 && kbo + i < 37) { held[c] = { t: "key", n: kbo + i }; keyDown(kbo + i, 1); }
+  else if (c === "," || c === "<") kbo = Math.max(0, kbo - 12);
+  else if (c === "." || c === ">") kbo = Math.min(24, kbo + 12);
+  else if (c >= "1" && c <= "8") {                      // the first eight of the 2x6 under the faders
+    if (fw === "picovave") { held[c] = { t: "button", n: 6 + (+c - 1) }; buttonHold(6 + (+c - 1), 1); }
+    else { held[c] = { t: "pad", n: +c - 1 }; padHold(+c - 1, 1); }
   }
 });
 addEventListener("keyup", (ev) => {
-  const c = ev.key.toLowerCase();
-  if (held[c] === undefined) return;
-  if (held[c] >= 100) send({ type: "pad", pad: held[c] - 100, vel: 0 });
-  else if (held[c] >= 0) keyDown(held[c], 0);
-  else send({ type: "button", b: -held[c], down: 0 });
+  const c = ev.key.toLowerCase(), h = held[c];
+  if (h === undefined) return;
+  if (h.t === "pad") padHold(h.n, 0);
+  else if (h.t === "key") keyDown(h.n, 0);
+  else buttonHold(h.n, 0);
   delete held[c];
 });
 
@@ -659,8 +739,7 @@ function showLog(lines) {
 }
 
 /* One bar for everything that takes time. pct === null means "working, no total yet": the fill
- * slides. Any operation that reports progress also opens the DEVICE box, so the bar is visible
- * while it runs instead of behind a closed summary. */
+ * slides. The DEVICE box is always on the page, so the bar is never hidden behind a fold. */
 function setProgress(pct, text) {
   const bar = $("progbar");
   if (bar) {
@@ -668,11 +747,7 @@ function setProgress(pct, text) {
     if (fill && fill.style) fill.style.width = (pct == null ? 0 : Math.max(0, Math.min(100, pct))) + "%";
     if (bar.classList) bar.classList.toggle("indet", pct == null);
   }
-  if (text != null) {
-    $("progtext").textContent = text;
-    const box = $("devbox");
-    if (box) box.open = true;
-  }
+  if (text != null) $("progtext").textContent = text;
 }
 
 function renderPkg(pkg, name) {
