@@ -43,7 +43,7 @@ picovave/
   sim/ web/ host/       wasm 시뮬레이터, 브라우저 페이지, 호스트 프리뷰
   tools/                빌드·검증·플래싱 스크립트 (§3)
   carts/                예제 카트(.p8.png)
-  docs/                 이 문서 + PICO8-PORT-PLAN / RECOVERY / REVERSE_ENGINEERING
+  docs/                 이 문서 + RECOVERY / REVERSE_ENGINEERING
   build/                산출물(추적 안 함)
 ```
 
@@ -640,8 +640,8 @@ baba(거부 5회 → `기기 빠듯`, 주황)와 terra(→ `기기 불가(끊김
 
 페이지가 카트의 Lua를 **미리 컴파일해** 업로드하고, 기기는 그 바이트코드를 그대로 undump한다.
 기기에서 사라지는 것은 두 가지다: 소스 압축해제(카트 크기만큼의 버퍼)와 Lua 컴파일(피크 152 KB,
-baba 기준). 프레임 시간은 **변하지 않는다** — 같은 VM이 같은 opcode를 실행하기 때문이다(docs/PRECOMPILED-CART-PLAN.md §6.1의
-측정: terra 172 ms/frame은 인터프리터 비용).
+baba 기준). 프레임 시간은 **변하지 않는다** — 같은 VM이 같은 opcode를 실행하기 때문이다(측정:
+terra 172 ms/frame은 GC가 아니라 인터프리터 비용).
 
 **포맷** (`src/picovave_cart.h`): `PVB1` + ROM 17,152 B + u32 bc_len + 바이트코드.
 
