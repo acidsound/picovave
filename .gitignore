@@ -1,9 +1,19 @@
-# Python caches from the tools
+# Generated build outputs (never tracked)
+build/
+platform/build/
+
+# Baked at build time from tools/pvcart.py (tools/build_sim.py)
+sim/cart_default.h
+
+# Runtime cart data (CARTDATA_PATH): the engine writes it when a cart calls cartdata()
+# and the target has a writable working directory - the host preview does.
+cdata/
+
+# Tooling cruft
 __pycache__/
 *.pyc
-
-# The OTA venv that tools/ota_probe.py re-execs into
-tools/.venv/
-
-# macOS
 .DS_Store
+
+# Throwaway build wrappers and the logs they produce
+run_build.sh
+build*.log
