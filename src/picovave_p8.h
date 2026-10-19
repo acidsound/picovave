@@ -59,11 +59,12 @@ extern void           hh_boot_stage(int stage);
  * tests/smk37_game_controls.c). The keybed's low white/black keys and the pad rows both
  * drive the D-pad, and two high keys / two pads are O and X.
  *
- * The same eight inputs also carry PICO-8's other two. 🌵 is a player button: p8_input.c turns it
- * into BUTTON_MASK_PAUSE, which a cart reads as PICO-8's btn(6). ⬜ is not: it becomes
- * BUTTON_MASK_ESCAPE, which the engine acts on itself (p8_emu.c p8_check_for_pause() -> p8_abort(),
- * and this file's own setjmp re-begins the cart). Both are polled exactly like the six, from the
- * two keys below the O/X pair and the two pads beside them. */
+ * One more pad and its key carry PICO-8's sixth button: p8_input.c turns the seam's Start button
+ * (the pause button on any gamepad) into BUTTON_MASK_PAUSE, which a cart reads as PICO-8's btn(6).
+ * PICO-8's other keyboard control is ESC, which stops the cart and hands the player back to the
+ * console. This port is execution-only - there is no console or editor to return to - so it
+ * carries no ESC input at all. All seven are polled exactly like the six above, from the keys on
+ * the bed and the pads beside them. */
 static uint32_t pv_gamepad(void)
 {
     hin_t in;
@@ -86,10 +87,8 @@ static uint32_t pv_gamepad(void)
         g |= BUTTON_1;                /* A = PICO-8 O */
     if ((hi & (1u << 4)) || (in.pads & (1u << 14)))
         g |= BUTTON_2;                /* B = PICO-8 X */
-    if ((lo & (1u << 31)) || (in.pads & (1u << 12)))
-        g |= BUTTON_SELECT;           /* ⬜ = restarts the cart (the engine's abort) */
     if ((hi & (1u << 0)) || (in.pads & (1u << 13)))
-        g |= BUTTON_START;            /* 🌵 = PICO-8's start: a cart reads it as btn(6) */
+        g |= BUTTON_START;            /* the seam's Start: a cart reads it as PICO-8's btn(6) */
 
     return g;
 }

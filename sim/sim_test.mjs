@@ -424,13 +424,13 @@ if (fixtures.length) {
   }
 
   // -------------------------------------------------------------------------------------------
-  // Pause, and the engine's own abort, end to end in a fresh instance so nothing above is
-  // disturbed. Pause is pad 13 (PICO-8's own btn(6)); the abort is pad 12, which pv_gamepad()
-  // still maps to ESCAPE even though the page no longer prints it as a control. Both have to
-  // cross the seam and reach the engine: Pause as btn(6), the abort as the engine's setjmp
-  // re-begin. The cart below shows its own age - PICO-8 dark blue for its first 40 frames, green
-  // after that, bright green while btn(6) is held - so the abort is the panel going back to the
-  // first colour, and Pause is the third one.
+  // Pause, and the absence of an ESC input, end to end in a fresh instance so nothing above is
+  // disturbed. Pause is pad 13 (PICO-8's own btn(6)) and has to cross the seam and reach the
+  // engine as btn(6). Pad 12 is the seam's old select bit: this port is execution-only, with no
+  // console for ESC to return to, so pv_gamepad() no longer maps it and it must do nothing at
+  // all. The cart below shows its own age - PICO-8 dark blue for its first 40 frames, green
+  // after that, bright green while btn(6) is held - so Pause is the third colour and pad 12 is
+  // no change at all.
   const ctl = (await WebAssembly.instantiate(probeMod, imports)).exports;
   if (ctl._initialize) ctl._initialize();
   const cfeed = (m) => {
@@ -458,7 +458,7 @@ if (fixtures.length) {
   const young = cfb[PX];                              // cls(1): the cart's first colour
   for (let i = 0; i < 60; i++) ctl.sim_frame();
   const aged = cfb[PX];                               // cls(3): it has been running past frame 40
-  check("the Pause/abort test cart runs and repaints as it ages",
+  check("the Pause test cart runs and repaints as it ages",
         young !== 0 && aged !== young && ctl.sim_status() === 0,
         "young=" + young + " aged=" + aged + " status=" + ctl.sim_status());
   ctl.sim_pad(13, 127);                               // Pause
@@ -470,14 +470,14 @@ if (fixtures.length) {
         "aged=" + aged + " with Pause held=" + startPx);
   for (let i = 0; i < 4; i++) ctl.sim_frame();       // and back to its age colour when let go
   const agedAgain = cfb[PX];
-  ctl.sim_pad(12, 127);                               // the engine's abort input
+  ctl.sim_pad(12, 127);                               // the seam's old select bit: now dead
   for (let i = 0; i < 3; i++) ctl.sim_frame();
   ctl.sim_pad(12, 0);
   for (let i = 0; i < 2; i++) ctl.sim_frame();
-  const restarted = cfb[PX];
-  check("the engine's abort input (pad 12) re-begins the running cart",
-        agedAgain === aged && restarted === young,
-        "aged=" + aged + " after abort=" + restarted + " (first colour=" + young + ")");
+  const afterSelect = cfb[PX];
+  check("the port has no ESC input: pad 12 leaves the running cart alone",
+        agedAgain === aged && afterSelect === aged,
+        "aged=" + aged + " after pad 12=" + afterSelect);
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -130,7 +130,8 @@ PSRAM 인터페이스가 없어 이 상한은 하드웨어 제약이다.
 기기는 Makkuro37의 `smk_input.h`(SPI2 + 74HC595, 그리고 ADC mux)로 18 버튼 · 37 건반 · 8 엔코더에
 더해 패드(타격 속도) · 페이더 4 · 피치/모드 휠까지 폴링으로 읽는다. `src/picovave_p8.h`의
 `pv_gamepad()`가 **소유자 검증된 SMK-37 Pro 게임 배열**(건반 저음 + 패드 행 = D-pad, 두 건반/패드
-= O/X)로 PICO-8의 6버튼을 만든다. 시뮬레이터 페이지는 `sim_button` / `sim_key` / `sim_enc` /
+= O/X)로 PICO-8의 6버튼을 만든다. PICO-8의 **ESC(중단) 입력은 없다** — ESC 중단은 콘솔로
+돌아가는 동작인데 이 포팅은 실행 전용이라 돌아갈 개발환경이 없기 때문이다. 시뮬레이터 페이지는 `sim_button` / `sim_key` / `sim_enc` /
 `sim_pad` / `sim_fader` / `sim_wheel`로 **같은 논리 입력**을 넣고, 두 경로 모두 같은 앱 계층이
 처리한다. 호스트 프리뷰는 같은 `hh_input_read` 계약을 스크립트로 먹인다.
 

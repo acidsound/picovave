@@ -179,7 +179,7 @@ FM1_GUARD_PC)` + `FM1_EMU_CON &= ~(1u<<3)`). 즉 **`EMU bit3`(sp 창 밖) 크래
 
 ```sh
 python3 tools/ota_probe.py --ask
-#   ...  <- identity: SMK-37 Pro_700  build 784914b2
+#   ...  <- identity: SMK-37 Pro_700  build 993b2146
 ```
 
 - `build xxxxxxxx`가 **이번 패키지의 태그와 같으면** 플래싱이 들어간 것이다(`build_picovave.py`가
