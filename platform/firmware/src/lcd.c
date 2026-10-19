@@ -7,7 +7,13 @@
  * while the last strip of a frame goes out. */
 /* pins and SPI1: hal/fm1_lcd_hw.h */
 #ifndef LCD_BAUD
-#define LCD_BAUD 4u                /* lsb/(BAUD+1): 4 = 12 MHz */
+/* SPI1 is clocked from the chip's low-speed bus (lsb_clk). The stock v016 sequence runs the
+ * panel at divider 4 (~12 MHz here), which makes a full 240x240 RGB565 frame take ~77 ms -
+ * 13 fps no matter how fast the engine is. Divider 1 is ~30 MHz, the first step that puts the
+ * pixel stream inside a 30 fps budget (115,200 B -> ~31 ms) while staying in the range these
+ * ST7789-class 240x240 modules are commonly driven at. If a particular panel shows sparkle or
+ * colour artefacts on the bench, divider 2 (~20 MHz) is the conservative fallback. */
+#define LCD_BAUD 1u
 #endif
 
 static uint8_t lcd_small[64];
@@ -93,6 +99,42 @@ static void lcd_blit(uint32_t x, uint32_t y, uint32_t w, uint32_t h, const uint1
         return;
     lcd_window(x, y, x + w - 1u, y + h - 1u);
     lcd_data(px, w * h * 2u);
+}
+
+/* ---- whole-frame stream -------------------------------------------------------------
+ * lcd_blit() sets the address window for every call, which for a 240-row panel is 240 windows
+ * (three commands and two short data transfers each) plus a sync before every one of them.
+ * A frame has one window: set it once, then keep CS low and feed rows back to back. The caller
+ * must wait for a row before overwriting its buffer (lcd_stream_wait), and end the stream so CS
+ * goes high on the final row (lcd_stream_end). */
+static void lcd_stream_begin(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+{
+    lcd_window(x, y, x + w - 1u, y + h - 1u);
+}
+
+static void lcd_stream_wait(void)
+{
+    if (!lcd_busy)
+        return;
+    fm1_lcd_wait();
+    lcd_busy = 0;                  /* CS stays low: the next row continues the same RAMWR */
+}
+
+static void lcd_stream_row(const uint16_t *px, uint32_t pixels)
+{
+    if (!pixels)
+        return;
+    /* fm1_lcd_send_data() takes a BYTE count, not a pixel count. Passing 240 here sent only
+     * 120 RGB565 pixels into a 240-column window, so the panel packed two source rows into one
+     * (the left half appeared twice, top-left and top-right). Keep the conversion at this single
+     * boundary: every caller counts pixels. */
+    fm1_lcd_send_data(px, pixels * 2u);
+    lcd_busy = 1;
+}
+
+static void lcd_stream_end(void)
+{
+    lcd_sync();                    /* wait for the last row, then raise CS */
 }
 
 #if BOARD_SMK37

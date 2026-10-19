@@ -23,292 +23,803 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SMK-37 Pro simulator - picovave</title>
+<title>picovave — SMK-37 Pro의 PICO-8</title>
 <style>
-  /* PICO-8's 16 colours and nothing else. Flat fills, no glow: this is an instrument panel, not a
-     light show. A border is kept only where a control must be found without reading (the primary
-     actions, the screen, the keys, the drop targets); everything else is a fill on the panel. */
+  /* PICO-8's 16 colours are the whole palette. The page is black, the instrument is navy, and the
+     controls are warm grey: the same flat, physical language as the panel itself. Type is split
+     between a text face for reading and a monospaced face for labels, settings and telemetry. */
   :root {
     --p0:#000000; --p1:#1D2B53; --p2:#7E2553; --p3:#008751; --p4:#AB5236;
     --p5:#5F574F; --p6:#C2C3C7; --p7:#FFF1E8; --p8:#FF004D; --p9:#FFA300;
     --p10:#FFEC27; --p11:#00E436; --p12:#29ADFF; --p13:#83769C; --p14:#FF77A8; --p15:#FFCCAA;
-    --bg:var(--p0); --fg:var(--p7); --panel:var(--p1); --dim:var(--p13);
-    --ok:var(--p11); --warn:var(--p9); --err:var(--p8); --accent:var(--p12);
+
+    --bg:var(--p0); --ink:var(--p7); --muted:var(--p6); --dim:#A99DBF;
+    --panel:var(--p1); --accent:var(--p12); --accent-ink:#00131f;
+    --ok:var(--p11); --warn:var(--p9); --err:var(--p8);
+    --line:rgba(194,195,199,.16); --line-strong:rgba(194,195,199,.34);
+    --case:#111a30; --deck:#1D2B53; --well:#080d19;
+
+    --font-ui:ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
+              "Noto Sans KR", Helvetica, Arial, sans-serif;
+    --font-mono:ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, monospace;
+    --max:1460px;
+    --gutter:clamp(18px, 4vw, 56px);
+    --radius-sm:2px; --radius-md:4px; --radius-lg:8px;
   }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg);
-         font:13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-         user-select:none; -webkit-user-select:none; touch-action:manipulation; }
-  header { display:flex; flex-wrap:wrap; gap:4px 14px; align-items:baseline;
-           padding:10px 16px; background:var(--panel); border-bottom:2px solid var(--p0); }
-  header h1 { margin:0; font-size:18px; letter-spacing:3px; color:var(--p10); }
-  header span { color:var(--dim); }
-  #status { margin-left:auto; color:var(--p6); }
-  #status.err { color:var(--p8); } #status.warn { color:var(--p9); } #status.ok { color:var(--p11); }
-  code { color:var(--p12); }
-  main { max-width:1500px; margin:0 auto; padding:12px; }
+  * { box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:400 15px/1.6 var(--font-ui); -webkit-font-smoothing:antialiased;
+         text-rendering:optimizeLegibility; touch-action:manipulation; }
+  ::selection { background:var(--p12); color:var(--p0); }
+  h1, h2, h3, h4, p { margin-top:0; }
+  a { color:inherit; }
+  button, input, select { font:inherit; }
+  canvas { display:block; max-width:100%; }
+  code { font-family:var(--font-mono); color:var(--p12); }
+  /* One vector set for every control the panel carries: a single 24-unit grid and stroke weight,
+     so a pad, a key or a manual row draws the same shape instead of whatever emoji font is around. */
+  .ic-sprite { position:absolute; width:0; height:0; overflow:hidden; }
+  .ic { display:block; fill:none; stroke:currentColor; stroke-width:2.3;
+        stroke-linecap:round; stroke-linejoin:round; }
+  .skip { position:fixed; z-index:300; left:16px; top:-80px; padding:10px 14px;
+          background:var(--p10); color:var(--p0); font:700 11px/1 var(--font-mono);
+          letter-spacing:.08em; text-decoration:none; border-radius:var(--radius-sm); }
+  .skip:focus { top:12px; }
 
-  /* ---- always visible: the instrument ---- */
-  .rig { background:var(--panel); border:2px solid var(--p0); border-radius:10px; padding:14px;
-         display:flex; flex-direction:column; gap:14px; }
-  .top { display:flex; flex-wrap:wrap; gap:20px; justify-content:space-around; align-items:flex-start; }
-  .blk { display:flex; gap:12px; align-items:flex-start; }
-  .lab { text-align:center; color:var(--p6); font-size:11px; letter-spacing:1px; margin-top:4px; }
+  /* ---- masthead: identity, navigation, system line, language ---- */
+  .masthead { position:sticky; top:0; z-index:100; background:rgba(0,0,0,.96);
+              border-bottom:1px solid var(--line-strong); }
+  .masthead__inner { max-width:var(--max); margin:0 auto; padding:14px var(--gutter) 9px;
+              display:grid; grid-template-columns:auto minmax(0,1fr) auto;
+              grid-template-areas:"brand nav lang"; gap:0 30px; align-items:center; }
+  .statusrail { max-width:var(--max); margin:0 auto; padding:0 var(--gutter) 11px; }
+  .brandmark { grid-area:brand; display:flex; flex-direction:column; gap:4px; text-decoration:none;
+               user-select:none; }
+  .brandmark h1 { margin:0; color:var(--p10); font:700 19px/1 var(--font-ui); letter-spacing:.2em; }
+  #moto { color:var(--dim); font:10px/1.2 var(--font-mono); letter-spacing:.12em;
+          text-transform:uppercase; }
+  .sitenav { grid-area:nav; justify-self:center; display:flex; align-items:center; gap:clamp(14px,2.4vw,30px);
+             min-width:0; }
+  .sitenav a { position:relative; padding:9px 0; color:var(--muted); text-decoration:none;
+               font:600 10px/1 var(--font-mono); letter-spacing:.15em; text-transform:uppercase;
+               white-space:nowrap; }
+  .sitenav a::after { content:""; position:absolute; left:0; right:0; bottom:0; height:1px;
+               background:transparent; transition:background .15s ease; }
+  .sitenav a:hover, .sitenav a[aria-current="true"] { color:var(--ink); }
+  .sitenav a:hover::after, .sitenav a[aria-current="true"]::after { background:var(--p12); }
+  .statusline { display:flex; align-items:flex-start; justify-content:flex-end;
+                gap:8px; width:100%; padding-top:7px; border-top:1px solid var(--line);
+                color:var(--muted); font:11px/1.45 var(--font-mono); text-align:right;
+                overflow-wrap:anywhere; }
+  .statusline::before { content:""; flex:0 0 auto; width:5px; height:5px; margin-top:6px;
+                border-radius:50%; background:currentColor; opacity:.85; }
+  .statusline.err { color:var(--err); }
+  .statusline.warn { color:var(--warn); }
+  .statusline.ok { color:var(--ok); }
+  .lang { grid-area:lang; justify-self:end; display:flex; border:1px solid var(--line-strong);
+          border-radius:var(--radius-md); overflow:hidden; user-select:none; }
+  .lang button { border:0; border-radius:0; padding:6px 9px; background:transparent;
+          color:var(--muted); font:700 10px/1 var(--font-mono); letter-spacing:.06em; cursor:pointer; }
+  .lang button + button { border-left:1px solid var(--line-strong); }
+  .lang button:hover { color:var(--ink); background:rgba(194,195,199,.08); }
+  .lang button.on { background:var(--p12); color:var(--accent-ink); }
 
+  /* ---- page and editorial section heads ---- */
+  .page { max-width:var(--max); margin:0 auto; padding:0 var(--gutter) 88px; }
+  .section { padding-top:clamp(40px, 6vw, 82px); scroll-margin-top:96px; }
+  .section--instrument { padding-top:clamp(30px, 4vw, 52px); }
+  .section-head { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(260px, .8fr);
+                  gap:14px clamp(28px, 5vw, 80px); align-items:end; padding-bottom:22px;
+                  margin-bottom:24px; border-bottom:1px solid var(--line); }
+  .kicker { grid-column:1 / -1; display:flex; align-items:center; gap:10px; margin:0 0 2px;
+            color:var(--p10); font:700 10px/1 var(--font-mono); letter-spacing:.16em;
+            text-transform:uppercase; }
+  .kicker-index { display:inline-flex; align-items:center; justify-content:center; min-width:24px;
+            height:18px; padding:0 5px; border:1px solid rgba(255,236,39,.45); border-radius:2px;
+            color:var(--p10); font-size:9px; }
+  .section-head h2 { margin:0; color:var(--ink); font:600 clamp(32px, 4.3vw, 58px)/1.02 var(--font-ui);
+            letter-spacing:-.04em; text-wrap:balance; }
+  .section-desc { margin:0 0 3px; max-width:52ch; color:var(--muted); font-size:14px; line-height:1.65; }
+
+  /* ---- the instrument: a physical deck, not a card ---- */
+  .instrument { padding:clamp(12px, 1.8vw, 24px); background:var(--p1);
+               border:1px solid rgba(255,255,255,.10); border-radius:10px;
+               box-shadow:inset 0 1px 0 rgba(255,255,255,.08), 0 30px 70px rgba(0,0,0,.42);
+               user-select:none; -webkit-user-select:none; }
+  .chassis { padding:clamp(13px, 2vw, 24px); background:var(--case);
+             border:1px solid rgba(0,0,0,.7); border-radius:7px;
+             box-shadow:inset 0 0 0 1px rgba(255,255,255,.035), inset 0 18px 36px rgba(0,0,0,.18); }
+  .top { display:grid; grid-template-columns:minmax(290px, 350px) minmax(0, 1.45fr) minmax(285px, 350px);
+         gap:clamp(18px, 2.7vw, 38px); align-items:start; }
+  .blk { display:grid; grid-template-columns:74px minmax(0, 1fr); gap:14px; align-items:start; min-width:0; }
+  .module { min-width:0; }
+  .module-head { display:flex; justify-content:space-between; align-items:baseline; gap:8px;
+                 min-height:16px; margin-bottom:10px; padding-bottom:7px;
+                 border-bottom:1px solid var(--line); }
+  .module-label { color:var(--muted); font:700 10px/1 var(--font-mono); letter-spacing:.15em;
+                  text-transform:uppercase; }
+  .module-meta { color:var(--dim); font:9px/1.2 var(--font-mono); letter-spacing:.05em;
+                 white-space:nowrap; }
+  .wheels-module .module-head { flex-direction:column; gap:3px; align-items:flex-start; }
+  .wheels-module .module-meta { display:none; }
+  .wheels { display:flex; justify-content:space-between; gap:4px; }
+  .wheel { display:flex; flex-direction:column; align-items:center; min-width:0; }
+  .lab { margin-top:6px; color:var(--muted); font:600 9px/1 var(--font-mono);
+         letter-spacing:.1em; text-align:center; }
   input.v { writing-mode:vertical-lr; direction:rtl; -webkit-appearance:none; appearance:none;
-            background:transparent; width:34px; height:150px; margin:0; cursor:pointer; }
-  .faders input.v { height:104px; }
-  input.v::-webkit-slider-runnable-track { width:6px; border-radius:3px; background:var(--p0); }
-  input.v::-moz-range-track { width:6px; border-radius:3px; background:var(--p0); }
-  input.v::-webkit-slider-thumb { -webkit-appearance:none; width:30px; height:14px; border-radius:2px;
-            background:var(--p6); border:2px solid var(--p0); margin-left:-12px; }
-  input.v::-moz-range-thumb { width:26px; height:12px; border-radius:2px; background:var(--p6); border:2px solid var(--p0); }
-  input.v.w::-webkit-slider-thumb { height:30px; background:var(--p15); }
+            width:32px; height:166px; margin:0; padding:14px 0; cursor:pointer;
+            background:linear-gradient(90deg, rgba(0,0,0,.45), transparent 35%, transparent 65%, rgba(0,0,0,.45));
+            border-radius:5px; touch-action:none; }
+  .faders input.v { width:30px; height:112px; padding:10px 0;
+            background:rgba(0,0,0,.16); }
+  input.v::-webkit-slider-runnable-track { width:5px; border-radius:3px; background:var(--p0);
+            box-shadow:inset 0 0 0 1px rgba(255,255,255,.06); }
+  input.v::-moz-range-track { width:5px; border-radius:3px; background:var(--p0);
+            box-shadow:inset 0 0 0 1px rgba(255,255,255,.06); }
+  input.v::-webkit-slider-thumb { -webkit-appearance:none; width:28px; height:14px;
+            border-radius:2px; background:var(--p6); border:2px solid var(--p0);
+            margin-left:-11.5px; box-shadow:inset 0 1px 0 rgba(255,255,255,.35), 0 2px 4px rgba(0,0,0,.4); }
+  input.v::-moz-range-thumb { width:24px; height:12px; border-radius:2px; background:var(--p6);
+            border:2px solid var(--p0); box-shadow:inset 0 1px 0 rgba(255,255,255,.35); }
+  input.v.w::-webkit-slider-thumb { height:28px; width:30px; background:var(--p15); margin-left:-12.5px; }
   input.v.w::-moz-range-thumb { height:26px; background:var(--p15); }
+  input.v:focus-visible { outline:2px solid var(--p10); outline-offset:2px; }
 
-  .scr { display:flex; flex-direction:column; gap:8px; }
-  #screen { width:240px; height:240px; image-rendering:pixelated; image-rendering:crisp-edges; display:block;
-            border:2px solid var(--p0); border-radius:2px; background:var(--p0); }
-  @media (min-width:1900px) { #screen { width:480px; height:480px; } main { max-width:1900px; } }
-  /* the six buttons under the screen: 2 columns x 3 rows, as web/sim/ and repo/ lay them out */
-  .nav { display:grid; grid-template-columns:repeat(2, 1fr); gap:6px; }
+  .scr { display:flex; flex-direction:column; gap:10px; }
+  .screen-bezel { padding:clamp(7px, .9vw, 11px); background:#04070c;
+                  border:1px solid rgba(0,0,0,.9); border-radius:6px;
+                  box-shadow:inset 0 0 0 1px rgba(255,255,255,.07), inset 0 0 22px rgba(0,0,0,.9); }
+  #screen { width:100%; height:auto; aspect-ratio:1; image-rendering:pixelated;
+            image-rendering:crisp-edges; background:var(--p0); border-radius:1px; }
+  .nav { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:5px; }
 
-  /* buttons: filled, not outlined */
-  .btn { border:none; border-radius:3px; text-align:center; cursor:pointer; color:var(--fg);
-         background:var(--p5); font:inherit; font-size:11px; font-weight:700; padding:6px 2px;
-         min-height:40px; display:flex; flex-direction:column; justify-content:center; line-height:1.15; }
-  .btn.lit, .btn.down { background:var(--p8); color:var(--p7); }
-
-  .mid { display:grid; grid-template-columns:repeat(8, 72px); row-gap:10px; }
-  .knob { display:flex; flex-direction:column; align-items:center; gap:3px; cursor:ns-resize; touch-action:none; }
-  .knob .dial { width:52px; height:52px; border-radius:50%; background:var(--p5);
-                border:2px solid var(--p0); position:relative; }
-  .knob .dial::after { content:""; position:absolute; left:50%; top:4px; width:3px; height:16px; margin-left:-1.5px;
-                background:var(--c, var(--p10)); border-radius:2px; transform-origin:50% 20px;
-                transform:rotate(var(--a, 0deg)); }
-  .knob b { font-size:11px; color:var(--p6); }
-  /* pads: one solid grey like the buttons; the column's colour is the label, and the whole pad
-     takes that colour while it is held. Sixteen saturated rectangles would be a fairground.
-     A pad only carries a label when the cart reads it: it is the PICO-8 control that pad IS,
-     printed in the middle of it. The other ten carry nothing, because they do nothing. */
-  .pad { height:58px; margin:0 4px; border-radius:3px; background:#5F574F; cursor:pointer;
-         position:relative; }
-  .pad.down { background:var(--c, var(--p8)); }
+  .mid { display:grid; grid-template-columns:repeat(8, minmax(0,1fr)); gap:12px 7px; }
+  .knob { display:flex; flex-direction:column; align-items:center; gap:5px; min-width:0;
+          cursor:ns-resize; touch-action:none; }
+  .knob .dial { width:clamp(32px, 3.3vw, 50px); height:clamp(32px, 3.3vw, 50px); border-radius:50%;
+          position:relative; background:radial-gradient(circle at 50% 38%, #6f675e 0 45%, #514b45 62%, #3b3733 100%);
+          border:2px solid #0b0b0b; box-shadow:inset 0 2px 0 rgba(255,255,255,.14), 0 4px 8px rgba(0,0,0,.4); }
+  .knob .dial::before { content:""; position:absolute; inset:5px; border-radius:50%;
+          border:1px solid rgba(0,0,0,.35); box-shadow:inset 0 0 8px rgba(0,0,0,.3); }
+  .knob .dial::after { content:""; position:absolute; left:50%; top:3px; width:3px;
+          height:clamp(10px, 1.1vw, 16px); margin-left:-1.5px; background:var(--c, var(--p10));
+          border-radius:2px; transform-origin:50% clamp(13px, 1.35vw, 21px);
+          transform:rotate(var(--a, 0deg)); box-shadow:0 0 3px rgba(0,0,0,.6); }
+  .knob b { max-width:100%; overflow:hidden; color:var(--muted); font:600 9px/1 var(--font-mono);
+          letter-spacing:.06em; }
+  .pad { height:clamp(40px, 4.7vw, 60px); margin:0; border-radius:4px; background:var(--p5);
+         border:1px solid rgba(0,0,0,.55); cursor:pointer; position:relative;
+         box-shadow:inset 0 1px 0 rgba(255,255,255,.13), inset 0 -3px 0 rgba(0,0,0,.24),
+                    0 2px 3px rgba(0,0,0,.22); touch-action:none; }
+  .pad::after { content:""; position:absolute; left:7px; right:7px; bottom:5px; height:2px;
+         background:var(--c, var(--p6)); opacity:.5; border-radius:2px; }
+  .pad.down { background:var(--c, var(--p8)); box-shadow:inset 0 2px 7px rgba(0,0,0,.35); }
+  .pad.down::after { opacity:0; }
   .pad.down i { color:var(--p0); }
   .pad i { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
-           justify-content:center; font-style:normal; font-weight:700; font-size:11px;
-           line-height:1.05; color:var(--c, var(--p7)); pointer-events:none; }
-  .pad i b { font-size:18px; font-weight:400; }        /* the PICO-8 glyph; the PC key under it */
+           justify-content:center; color:var(--c, var(--p7)); pointer-events:none; }
+  .pad i .ic { width:clamp(16px, 1.5vw, 21px); height:clamp(16px, 1.5vw, 21px); }
 
-  .rgt { display:flex; flex-direction:column; gap:8px; }
-  .faders { display:flex; justify-content:space-around; }
-  .grid6 { display:grid; grid-template-columns:repeat(6, 62px); gap:6px; }
+  .rgt { display:flex; flex-direction:column; gap:15px; }
+  .faders { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:3px; }
+  .faders > div { display:flex; flex-direction:column; align-items:center; min-width:0; }
+  .grid6 { display:grid; grid-template-columns:repeat(6, minmax(0,1fr)); gap:5px; }
 
-  /* the keyboard: solid naturals with a bottom lip, solid sharps, PICO-8 blue when pressed.
-     No horizontal padding or key margin: the black keys are placed in % of the tray, so any
-     inset would walk them off the naturals. */
-  .keys { position:relative; height:150px; display:flex; touch-action:none;
-          background:var(--p5); border-radius:6px; padding:8px 0 0; }
+  .keybed-module { margin-top:22px; }
+  .keys-wrap { overflow-x:auto; overscroll-behavior-x:contain; scrollbar-width:thin;
+         scrollbar-color:var(--p5) var(--p0); border-radius:5px; }
+  .keys-wrap::-webkit-scrollbar { height:7px; }
+  .keys-wrap::-webkit-scrollbar-track { background:var(--p0); }
+  .keys-wrap::-webkit-scrollbar-thumb { background:var(--p5); border-radius:4px; }
+  .keys { position:relative; min-width:720px; height:clamp(160px, 14vw, 194px); display:flex;
+          touch-action:none; background:var(--p5); border-radius:5px; padding:8px 0 0;
+          box-shadow:inset 0 2px 0 rgba(255,255,255,.12), inset 0 -5px 0 rgba(0,0,0,.24),
+                     0 5px 10px rgba(0,0,0,.22); }
   .key { cursor:pointer; border-radius:0 0 3px 3px; position:relative; }
-  .key.w { flex:1; margin:0; background:var(--p7); box-shadow:inset -1px 0 0 var(--p6), inset 0 -5px 0 var(--p6); }
-  .key.b { position:absolute; top:8px; height:62%; background:var(--p0); z-index:2;
-           box-shadow:inset 0 -4px 0 #333333; }
-  .key.down.w { background:var(--p12); box-shadow:inset -1px 0 0 #1b6fa8, inset 0 -5px 0 #1b6fa8; }
+  .key.w { flex:1; margin:0; background:var(--p7);
+           box-shadow:inset -1px 0 0 rgba(0,0,0,.20), inset 1px 0 0 rgba(255,255,255,.45),
+                      inset 0 -5px 0 var(--p6); }
+  .key.b { position:absolute; top:8px; height:62%; background:#090909; z-index:2;
+           box-shadow:inset 0 -4px 0 #333333, inset 0 1px 0 rgba(255,255,255,.11),
+                      0 3px 4px rgba(0,0,0,.35); }
+  .key.down.w { background:var(--p12);
+           box-shadow:inset -1px 0 0 #1b6fa8, inset 0 -5px 0 #1b6fa8; }
   .key.down.b { background:var(--p8); }
-  /* the few keybed keys the cart reads carry the PICO-8 control they drive, on the key's own lip:
-     the same eight controls the pads carry, because pv_gamepad() answers for both. */
-  .key i { position:absolute; left:0; right:0; bottom:8px; text-align:center; font-style:normal;
-           font-size:11px; font-weight:700; color:var(--p13); pointer-events:none; }
+  .key i { position:absolute; left:0; right:0; bottom:8px; text-align:center; color:var(--p5); pointer-events:none; }
   .key.b i { bottom:auto; top:3px; color:var(--p6); }
   .key.down.w i { color:var(--p0); }
   .key.down.b i { color:var(--p7); }
+  .key i .ic { width:13px; height:13px; margin:0 auto; }
 
-  .ctl { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
-  .ctl button, .ctl a, .ctl label, .ctl select {
-      font:inherit; font-size:12px; font-weight:700; letter-spacing:.5px; color:var(--fg);
-      background:var(--p5); border:2px solid var(--p0); border-radius:3px; padding:7px 12px;
-      cursor:pointer; text-decoration:none; }
-  .ctl button:hover, .ctl a:hover, .ctl label:hover, .ctl select:hover { background:var(--p13); }
-  .ctl .ghost { background:transparent; border:none; color:var(--p6); padding:7px 6px; }
-  .ctl .ghost:hover { background:var(--p5); color:var(--fg); }
-  .ctl .pri { background:var(--p12); color:var(--p0); }
-  .ctl .pri:hover { background:var(--p6); }
-  .ctl .danger { background:var(--p8); color:var(--p7); }
-  .ctl .danger:hover { background:var(--p14); }
-  .ctl button.on { background:var(--p11); color:var(--p0); }
-  .ctl input[type=file] { display:none; }
-  .ctl select { max-width:220px; }
-  .ctl b { color:var(--dim); font-weight:600; font-size:12px; }
+  .transport { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-top:20px;
+               padding-top:15px; border-top:1px solid var(--line); }
+  .transport-label { color:var(--dim); font:700 9px/1 var(--font-mono); letter-spacing:.15em;
+               text-transform:uppercase; }
+  .transport-actions { display:flex; gap:6px; flex-wrap:wrap; }
+  .transport-actions button { min-height:36px; }
 
-  /* ---- boxes ----
-     The DEVICE box is a control panel, not a drawer: it is always on the page, so it is a plain
-     <section> with a heading — nothing to open, nothing that can hide a progress bar or a log.
-     Only the manual below folds, because it is reference rather than a control. */
-  .box { background:var(--panel); border:2px solid var(--p0); border-radius:8px; margin:12px 0; }
-  .box > h2 { margin:0; padding:10px 14px; color:var(--p10); font-weight:700; letter-spacing:1px;
-              font-size:13px; }
-  .box > .body { padding:0 14px 14px; display:flex; flex-direction:column; gap:10px; }
-  details.box > summary { cursor:pointer; padding:10px 14px; color:var(--p10); font-weight:700;
-                          letter-spacing:1px; list-style:none; }
-  details.box > summary::-webkit-details-marker { display:none; }
-  details.box > summary::before { content:"\25B8 "; color:var(--p13); }
-  details.box[open] > summary::before { content:"\25BE "; }
-  details.box > .body { padding:0 14px 14px; display:flex; flex-direction:column; gap:10px; }
+  /* ---- buttons and fields ---- */
+  button, .button { -webkit-tap-highlight-color:transparent; }
+  .btn { border:1px solid rgba(0,0,0,.55); border-radius:var(--radius-sm); text-align:center;
+         cursor:pointer; color:var(--fg, var(--p7)); background:var(--p5);
+         font:700 9px/1.15 var(--font-mono); letter-spacing:.045em; padding:6px 3px;
+         min-height:40px; display:flex; flex-direction:column; justify-content:center;
+         box-shadow:inset 0 1px 0 rgba(255,255,255,.12), inset 0 -2px 0 rgba(0,0,0,.2);
+         transition:background .12s ease, color .12s ease, transform .08s ease; }
+  .btn:hover { background:#6b6259; color:var(--p7); }
+  .btn:active { transform:translateY(1px); }
+  .btn.lit, .btn.down { background:var(--p8); color:var(--p7); }
+  .grid6 .btn { min-height:34px; font-size:8px; padding:4px 1px; }
 
-  details.stats { margin-left:auto; }
-  details.stats > summary { cursor:pointer; color:var(--p6); list-style:none; font-size:12px; }
+  .transport-actions button, .station .ctl button, .station .ctl a {
+         display:flex; align-items:center; justify-content:center; min-height:38px; width:100%;
+         padding:8px 11px; border:1px solid var(--line-strong); border-radius:var(--radius-sm);
+         background:var(--p5); color:var(--p7); text-decoration:none; cursor:pointer;
+         font:700 10px/1.25 var(--font-mono); letter-spacing:.065em; text-transform:uppercase;
+         box-shadow:inset 0 1px 0 rgba(255,255,255,.12), 0 2px 3px rgba(0,0,0,.18);
+         transition:background .12s ease, border-color .12s ease, color .12s ease, transform .08s ease; }
+  .transport-actions button { width:auto; padding:8px 14px; }
+  .transport-actions button:hover, .station .ctl button:hover, .station .ctl a:hover {
+         background:#6b6259; border-color:var(--p6); }
+  .transport-actions button:active, .station .ctl button:active, .station .ctl a:active {
+         transform:translateY(1px); }
+  .pri, .station .ctl .pri { background:var(--p12); border-color:#7fd1ff; color:var(--accent-ink);
+         box-shadow:inset 0 1px 0 rgba(255,255,255,.35), 0 2px 4px rgba(0,0,0,.24); }
+  .pri:hover, .station .ctl .pri:hover { background:#62c1ff; border-color:#a5e1ff; color:var(--p0); }
+  .danger, .station .ctl .danger { background:var(--p8); border-color:#ff5c8c; color:var(--p7); }
+  .danger:hover, .station .ctl .danger:hover { background:#ff2f6c; border-color:#ff91ad; }
+  .ghost, .station .ctl .ghost { background:transparent; border-color:var(--line-strong);
+         color:var(--muted); box-shadow:none; text-transform:none; letter-spacing:.025em; }
+  .ghost:hover, .station .ctl .ghost:hover { background:rgba(194,195,199,.08); color:var(--ink);
+         border-color:var(--p6); }
+  .transport-actions .pri { background:var(--p12); border-color:#7fd1ff; color:var(--accent-ink);
+         box-shadow:inset 0 1px 0 rgba(255,255,255,.35), 0 2px 4px rgba(0,0,0,.24); }
+  .transport-actions .pri:hover { background:#62c1ff; border-color:#a5e1ff; color:var(--p0); }
+  .transport-actions .ghost { background:transparent; border-color:var(--line-strong);
+         color:var(--muted); box-shadow:none; text-transform:none; letter-spacing:.025em; }
+  .transport-actions .ghost:hover { background:rgba(194,195,199,.08); color:var(--ink);
+         border-color:var(--p6); }
+  .ctl button.on { box-shadow:inset 0 -3px 0 var(--p11), inset 0 1px 0 rgba(255,255,255,.2); }
+  #sound.on { background:var(--p11); border-color:#7dff9e; color:var(--p0); }
+  #sound.on::before { content:"●"; margin-right:6px; font-size:8px; }
+  button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible,
+  summary:focus-visible, label:focus-visible {
+         outline:2px solid var(--p10); outline-offset:2px; }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+
+  select { width:100%; min-height:38px; appearance:none; -webkit-appearance:none;
+         padding:7px 32px 7px 10px; background-color:var(--p1); color:var(--p7);
+         border:1px solid var(--line-strong); border-radius:var(--radius-sm); cursor:pointer;
+         font:12px/1.3 var(--font-mono); background-image:
+           linear-gradient(45deg, transparent 50%, var(--p6) 50%),
+           linear-gradient(135deg, var(--p6) 50%, transparent 50%);
+         background-position:calc(100% - 15px) 50%, calc(100% - 10px) 50%;
+         background-size:5px 5px, 5px 5px; background-repeat:no-repeat; }
+  select:hover { border-color:var(--p6); }
+
+  details.stats { margin-left:auto; min-width:0; padding-left:16px; border-left:1px solid var(--line); }
+  details.stats > summary { cursor:pointer; color:var(--muted); list-style:none;
+         font:700 9px/1 var(--font-mono); letter-spacing:.13em; text-transform:uppercase; }
   details.stats > summary::-webkit-details-marker { display:none; }
-  details.stats > summary::before { content:"\25B8 "; color:var(--p13); }
-  details.stats[open] > summary::before { content:"\25BE "; }
-  .meter { display:flex; flex-wrap:wrap; gap:2px 12px; color:var(--dim); font-size:11px;
-           font-variant-numeric:tabular-nums; padding-top:4px; }
+  details.stats > summary::before { content:"+"; display:inline-block; width:12px; color:var(--p13); }
+  details.stats[open] > summary::before { content:"−"; }
+  .meter { display:flex; flex-wrap:wrap; gap:3px 14px; padding-top:8px; color:var(--dim);
+         font:10px/1.4 var(--font-mono); font-variant-numeric:tabular-nums; }
   .meter b { color:var(--p6); font-weight:600; }
 
-  /* ---- a separate screen: one bar for every operation that takes time ---- */
-  .prog { display:flex; align-items:center; gap:10px; }
-  .prog .bar { flex:1; height:10px; background:var(--p0); border-radius:2px; overflow:hidden; }
-  .prog .bar i { display:block; height:100%; width:0; background:var(--p11); transition:width .12s linear; }
+  /* ---- device: an operating console with three explicit stations ---- */
+  .devbox { background:var(--panel); border:1px solid rgba(255,255,255,.12);
+         border-radius:var(--radius-lg); overflow:hidden; user-select:none; -webkit-user-select:none;
+         box-shadow:inset 0 1px 0 rgba(255,255,255,.06), 0 22px 52px rgba(0,0,0,.32); }
+  .devbar { padding:18px clamp(16px, 2.4vw, 26px); background:var(--case);
+         border-bottom:1px solid var(--line); }
+  .devbar h3 { margin:0 0 13px; color:var(--p10); font:700 10px/1 var(--font-mono);
+         letter-spacing:.16em; text-transform:uppercase; }
+  .devrow { display:grid; grid-template-columns:repeat(5, minmax(0,1fr)); gap:10px 18px; }
+  .devrow > span { display:flex; flex-direction:column; gap:3px; color:var(--dim);
+         font:9px/1.2 var(--font-mono); letter-spacing:.07em; text-transform:uppercase; }
+  .devrow b { color:var(--muted); font:600 12px/1.35 var(--font-mono); letter-spacing:0;
+         text-transform:none; overflow-wrap:anywhere; }
+  .devbody { padding:clamp(16px, 2.4vw, 26px); display:flex; flex-direction:column; gap:16px; }
+
+  .transfer-panel { display:grid; gap:8px; padding:13px 15px; background:var(--well);
+         border:1px solid var(--line); border-radius:var(--radius-sm); }
+  .panel-head { display:flex; align-items:baseline; justify-content:space-between; gap:14px;
+         color:var(--muted); font:10px/1.3 var(--font-mono); letter-spacing:.1em;
+         text-transform:uppercase; }
+  #progtext { color:var(--p6); text-align:right; text-transform:none; letter-spacing:.02em;
+         overflow-wrap:anywhere; }
+  .prog { height:7px; background:var(--p0); border-radius:2px; overflow:hidden;
+         box-shadow:inset 0 0 0 1px rgba(255,255,255,.06); }
+  .prog .bar { width:100%; height:100%; background:transparent; overflow:hidden; }
+  .prog .bar i { display:block; width:0; height:100%; background:var(--p11);
+         transition:width .12s linear; }
   .prog .bar.indet i { width:35%; animation:slide 1.1s ease-in-out infinite; }
   @keyframes slide { 0% { margin-left:-35%; } 100% { margin-left:100%; } }
-  .prog span { color:var(--p6); font-size:11px; min-width:9em; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior:auto; }
+    .prog .bar.indet { animation:none; width:100%; opacity:.55; }
+    * { transition-duration:.01ms !important; }
+  }
 
-  .devrow { display:flex; flex-wrap:wrap; gap:6px 18px; align-items:center; color:var(--dim); font-size:12px; }
-  .devrow b { color:var(--p6); font-variant-numeric:tabular-nums; }
-  .dev pre { margin:0; padding:8px 10px; background:var(--p0); border-radius:3px; color:var(--p6);
-             font:11px/1.4 ui-monospace, monospace; white-space:pre-wrap; overflow:auto; }
-  #pkg { max-height:150px; }
+  .workgrid { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:14px; }
+  .station { min-width:0; display:flex; flex-direction:column; gap:14px; padding:17px;
+         background:rgba(0,0,0,.22); border:1px solid var(--line); border-top:2px solid var(--p5);
+         border-radius:var(--radius-sm); }
+  .station--sim { border-top-color:var(--p12); }
+  .station--usb { border-top-color:var(--p8); }
+  .station--cart { border-top-color:var(--p11); }
+  .station-head { display:flex; align-items:flex-start; gap:11px; }
+  .station-no { flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center;
+         width:22px; height:20px; border:1px solid var(--line-strong); border-radius:2px;
+         color:var(--dim); font:700 9px/1 var(--font-mono); }
+  .station h4 { margin:0 0 5px; color:var(--ink); font:600 15px/1.2 var(--font-ui);
+         letter-spacing:-.01em; }
+  .station p { margin:0; color:var(--muted); font-size:12px; line-height:1.55; }
+  .station .ctl { display:flex; flex-direction:column; align-items:stretch; gap:7px; }
+  .station .ctl input[type=file] { display:none; }
+  .station-hint { margin-top:auto; padding-top:2px; color:var(--dim); font:10.5px/1.55 var(--font-mono); }
+  .station .field { display:grid; gap:5px; }
+  .field-label { color:var(--dim); font:700 9px/1 var(--font-mono); letter-spacing:.1em;
+         text-transform:uppercase; }
+  .station .field select { font-size:11px; }
+
+  #drop, #cartdrop { display:flex; align-items:center; justify-content:center; min-height:46px;
+         width:100%; padding:8px 10px; border:1px dashed var(--p13); border-radius:var(--radius-sm);
+         color:var(--dim); background:rgba(0,0,0,.14); cursor:pointer; text-align:center;
+         font:600 10px/1.4 var(--font-mono); letter-spacing:.02em; transition:border-color .12s ease,
+         background .12s ease, color .12s ease; }
+  #drop:hover, #cartdrop:hover { border-color:var(--p6); color:var(--muted); }
+  #drop.hot { border-color:var(--p11); background:var(--p3); color:var(--p7); }
+  #drop code, #cartdrop code { color:inherit; }
+
+  .cart-status { display:flex; align-items:baseline; gap:14px; padding:11px 14px;
+         background:rgba(0,0,0,.18); border-left:2px solid var(--p11); border-radius:0 2px 2px 0; }
+  .cart-status .label { flex:0 0 auto; color:var(--dim); font:700 9px/1 var(--font-mono);
+         letter-spacing:.13em; text-transform:uppercase; }
+  #cartsay { color:var(--muted); font:600 11px/1.5 var(--font-mono); overflow-wrap:anywhere; }
+
+  .readouts { display:grid; grid-template-columns:minmax(0, 1fr) minmax(0, 1fr); gap:14px; }
+  .readout { min-width:0; }
+  .readout h4 { margin:0 0 6px; color:var(--dim); font:700 9px/1 var(--font-mono);
+         letter-spacing:.13em; text-transform:uppercase; }
+  .dev pre { margin:0; padding:11px 13px; background:var(--well); border:1px solid var(--line);
+         border-radius:var(--radius-sm); color:var(--muted);
+         font:10.5px/1.55 var(--font-mono); white-space:pre-wrap; overflow:auto; }
+  #pkg { max-height:170px; }
   #flashlog { max-height:220px; }
-  #drop { flex:1 1 220px; min-height:30px; display:flex; align-items:center; justify-content:center;
-          padding:6px 10px; border:2px dashed var(--p13); border-radius:3px; color:var(--dim); }
-  #drop.hot { background:var(--p3); color:var(--p7); }
-  #cartdrop { border-style:dashed; }
 
-  .help { color:var(--p6); font-size:12px; line-height:1.6; }
-  .help b { color:var(--p7); }
-  .help code { color:var(--p12); }
-  @media (max-width:700px) { .keys { height:120px; } .mid { grid-template-columns:repeat(8, minmax(38px,1fr)); }
-    .knob .dial { width:34px; height:34px; } .knob .dial::after { height:11px; transform-origin:50% 14px; }
-    .pad { height:40px; margin:0 2px; } .grid6 { grid-template-columns:repeat(6, minmax(48px,1fr)); }
-    .blk, .rgt, .mid { width:100%; } .top { justify-content:center; } }
+  /* ---- manual: editorial reading layout with a sticky contents rail ---- */
+  .manual-shell { border-top:1px solid var(--line); padding-top:26px; }
+  .docs-layout { display:grid; grid-template-columns:190px minmax(0, 760px);
+         gap:clamp(26px, 5vw, 72px); align-items:start; }
+  .docs-toc { position:sticky; top:104px; }
+  .toc-label { display:block; margin-bottom:11px; color:var(--p10);
+         font:700 9px/1 var(--font-mono); letter-spacing:.15em; text-transform:uppercase; }
+  .docs-toc nav { display:flex; flex-direction:column; border-left:1px solid var(--line); }
+  .docs-toc a { margin-left:-1px; padding:6px 0 6px 13px; border-left:2px solid transparent;
+         color:var(--muted); text-decoration:none; font:500 12px/1.35 var(--font-ui);
+         transition:color .12s ease, border-color .12s ease; }
+  .docs-toc a:hover { color:var(--ink); border-left-color:var(--p12); }
+  .docs { min-width:0; color:var(--muted); font-size:14.5px; line-height:1.72; user-select:text;
+         -webkit-user-select:text; }
+  .docs-overline { margin:0 0 24px; padding-bottom:10px; border-bottom:1px solid var(--line);
+         color:var(--dim); font:700 9px/1 var(--font-mono); letter-spacing:.14em;
+         text-transform:uppercase; }
+  .docs h3 { scroll-margin-top:104px; margin:44px 0 12px; padding-top:20px;
+         border-top:1px solid var(--line); color:var(--ink); font:600 22px/1.22 var(--font-ui);
+         letter-spacing:-.025em; }
+  .docs h3:first-child { margin-top:0; padding-top:0; border-top:0; }
+  .docs h4 { margin:22px 0 7px; color:var(--ink); font:600 15px/1.3 var(--font-ui); }
+  .docs p { max-width:68ch; margin:0 0 14px; }
+  .docs b, .docs strong { color:var(--ink); font-weight:600; }
+  .docs code { padding:1px 4px; border-radius:2px; background:rgba(41,173,255,.09);
+         color:var(--p12); font-size:.88em; }
+  .docs ul, .docs ol { max-width:68ch; margin:0 0 18px; padding-left:20px; }
+  .docs li { margin:0 0 7px; padding-left:2px; }
+  .docs li::marker { color:var(--dim); }
+  .docs a { color:var(--p12); text-underline-offset:3px; }
+  .docs a:hover { color:var(--p7); }
+  .table-wrap { max-width:100%; margin:18px 0 24px; overflow-x:auto; }
+  .keymap { width:100%; border-collapse:collapse; color:var(--muted); font-size:12.5px; }
+  .keymap th { padding:8px 10px; border-bottom:1px solid var(--line-strong); color:var(--dim);
+         font:700 9px/1.2 var(--font-mono); letter-spacing:.1em; text-align:left;
+         text-transform:uppercase; white-space:nowrap; }
+  .keymap td { padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  .keymap tr:last-child td { border-bottom:0; }
+  .keymap td:first-child { color:var(--ink); }
+  .keymap code { white-space:nowrap; }
+  .keymap .ic { display:inline-block; width:16px; height:16px; vertical-align:-3px; color:var(--p12); }
+  .keymap .ic + .ic { margin-left:3px; }
+  .callout { margin:20px 0; padding:13px 16px; border-left:2px solid var(--p12);
+         background:rgba(41,173,255,.07); color:var(--muted); }
+  .callout > b:first-child { display:block; margin-bottom:4px; color:var(--p12);
+         font:700 9px/1.2 var(--font-mono); letter-spacing:.12em; text-transform:uppercase; }
+  .callout p { margin:0; }
+  .callout.warn { border-left-color:var(--p9); background:rgba(255,163,0,.07); }
+  .callout.warn > b:first-child { color:var(--p9); }
+
+  .sitefooter { max-width:var(--max); margin:0 auto; padding:22px var(--gutter) 34px;
+         display:flex; align-items:center; gap:18px; border-top:1px solid var(--line);
+         color:var(--dim); font:10px/1.5 var(--font-mono); letter-spacing:.04em; }
+  .footer-brand { color:var(--p10); font-weight:700; letter-spacing:.16em; }
+  #footerNote { margin-right:auto; }
+  #footerTop { color:var(--muted); text-decoration:none; white-space:nowrap; }
+  #footerTop:hover { color:var(--ink); text-decoration:underline; text-underline-offset:3px; }
+
+  /* ---- staged responsive composition ---- */
+  @media (max-width:1180px) {
+    .masthead__inner { grid-template-columns:auto minmax(0,1fr) auto;
+         grid-template-areas:"brand nav lang"; gap:0 24px; }
+    .top { grid-template-columns:minmax(290px, 390px) minmax(0, 1fr); }
+    .mix-module { grid-column:1 / -1; }
+    .mix-module .rgt { display:grid; grid-template-columns:minmax(0, .8fr) minmax(0, 1.2fr);
+         gap:26px; align-items:end; }
+    .mix-module .faders input.v { height:96px; }
+    .workgrid { grid-template-columns:repeat(2, minmax(0,1fr)); }
+    .station--cart { grid-column:1 / -1; }
+    .devrow { grid-template-columns:repeat(3, minmax(0,1fr)); }
+  }
+  @media (max-width:900px) {
+    .masthead__inner { grid-template-columns:minmax(0,1fr) auto;
+         grid-template-areas:"brand lang" "nav nav"; gap:8px 20px; }
+    .statusline { justify-content:flex-start; text-align:left; }
+    .sitenav { justify-self:stretch; justify-content:flex-start; gap:22px; padding-top:9px;
+         border-top:1px solid var(--line); overflow-x:auto; scrollbar-width:none; }
+    .sitenav::-webkit-scrollbar { display:none; }
+    .section-head { grid-template-columns:1fr; gap:12px; }
+    .section-head h2 { font-size:clamp(32px, 6vw, 44px); }
+    .top { grid-template-columns:1fr; }
+    .blk { grid-template-columns:74px minmax(0,1fr); max-width:430px; margin:0 auto; }
+    .mix-module { grid-column:auto; }
+    .mix-module .rgt { display:flex; align-items:stretch; gap:15px; }
+    .workgrid { grid-template-columns:1fr; }
+    .station--cart { grid-column:auto; }
+    .readouts { grid-template-columns:1fr; }
+    .docs-layout { grid-template-columns:1fr; gap:24px; }
+    .docs-toc { position:static; min-width:0; }
+    .docs-toc nav { flex-direction:row; overflow-x:auto; border-left:0;
+         border-bottom:1px solid var(--line); scrollbar-width:none; }
+    .docs-toc nav::-webkit-scrollbar { display:none; }
+    .docs-toc a { flex:0 0 auto; padding:7px 13px; border-left:0; border-bottom:2px solid transparent;
+         white-space:nowrap; }
+    .docs-toc a:hover { border-left-color:transparent; border-bottom-color:var(--p12); }
+    .manual-shell { padding-top:22px; }
+  }
+  @media (max-width:640px) {
+    .masthead__inner { padding:12px 16px 8px; gap:8px 12px; }
+    .statusrail { padding:0 16px 9px; }
+    .brandmark h1 { font-size:17px; }
+    #moto { font-size:9px; }
+    .statusline { font-size:10px; }
+    .page { padding-left:16px; padding-right:16px; padding-bottom:56px; }
+    .section { padding-top:44px; }
+    .section--instrument { padding-top:28px; }
+    .section-head { padding-bottom:16px; margin-bottom:16px; }
+    .section-head h2 { font-size:31px; }
+    .section-desc { font-size:13px; }
+    .instrument { padding:9px; }
+    .chassis { padding:11px; }
+    .blk { grid-template-columns:62px minmax(0,1fr); gap:10px; max-width:none; }
+    .wheel input.v { height:148px; }
+    .module-head { margin-bottom:8px; padding-bottom:6px; }
+    .module-meta { font-size:8px; }
+    .module-label { font-size:9px; }
+    .nav { gap:4px; }
+    .nav .btn { min-height:31px; font-size:8px; }
+    .mid { gap:10px 4px; }
+    .knob { gap:4px; }
+    .knob b { font-size:8px; letter-spacing:0; }
+    .pad { height:37px; }
+    .pad i { font-size:9px; }
+    .pad i b { font-size:14px; }
+    .pad::after { left:4px; right:4px; bottom:3px; height:1px; }
+    .faders input.v { height:90px; width:26px; }
+    .grid6 { gap:4px; }
+    .grid6 .btn { min-height:30px; font-size:7px; padding:3px 1px; }
+    .keybed-module { margin-top:18px; }
+    .keys { min-width:680px; height:154px; }
+    .transport { gap:10px; }
+    .transport-label { width:100%; }
+    .transport-actions { width:100%; }
+    .transport-actions button { flex:1; padding:8px 8px; font-size:9px; }
+    details.stats { width:100%; margin-left:0; padding-left:0; padding-top:10px; border-left:0;
+         border-top:1px solid var(--line); }
+    .devbar { padding:15px; }
+    .devrow { grid-template-columns:1fr 1fr; gap:9px 12px; }
+    .devbody { padding:14px; gap:13px; }
+    .station { padding:14px; }
+    .cart-status { flex-direction:column; gap:4px; }
+    .docs h3 { font-size:20px; margin-top:34px; }
+    .docs { font-size:14px; }
+    .sitefooter { align-items:flex-start; flex-wrap:wrap; gap:8px 14px; padding-bottom:28px; }
+    #footerNote { flex:1 1 100%; }
+  }
 </style>
 </head>
 <body>
-<header>
-  <h1 id="brand">PICOVAVE</h1>
-  <span id="moto">SMK-37 Pro · PICO-8</span>
-  <span id="status">wasm 로딩 중…</span>
+<a class="skip" href="#instrument" id="skipLink">플레이로 건너뛰기</a>
+
+<!-- The panel's control icons. Status is carried by icons on the pad and key faces so
+     the panel never depends on an emoji font - every shape is drawn here once. -->
+<svg class="ic-sprite" aria-hidden="true" focusable="false" width="0" height="0">
+  <defs>
+    <symbol id="ic-up" viewBox="0 0 24 24"><path d="M6.5 14.5 12 8.5l5.5 6"/></symbol>
+    <symbol id="ic-down" viewBox="0 0 24 24"><path d="M6.5 9.5 12 15.5l5.5-6"/></symbol>
+    <symbol id="ic-left" viewBox="0 0 24 24"><path d="M14.5 6.5 8.5 12l6 5.5"/></symbol>
+    <symbol id="ic-right" viewBox="0 0 24 24"><path d="M9.5 6.5 15.5 12l-6 5.5"/></symbol>
+    <symbol id="ic-o" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6"/></symbol>
+    <symbol id="ic-x" viewBox="0 0 24 24"><path d="m7.5 7.5 9 9m0-9-9 9"/></symbol>
+    <symbol id="ic-pause" viewBox="0 0 24 24"><path d="M9.5 6.5v11m5-11v11"/></symbol>
+  </defs>
+</svg>
+
+<header class="masthead">
+  <div class="masthead__inner">
+    <a class="brandmark" href="#instrument" aria-label="PICOVAVE">
+      <h1 id="brand">PICOVAVE</h1>
+      <span id="moto">PICO-8 console · SMK-37 Pro</span>
+    </a>
+    <nav class="sitenav" aria-label="주요 섹션 / Primary">
+      <a href="#instrument" id="navPlay" aria-current="true">플레이</a>
+      <a href="#device-panel" id="navDevice">기기 · 카트</a>
+      <a href="#manual" id="navManual">매뉴얼</a>
+    </nav>
+    <div class="lang" role="group" aria-label="Language / 언어">
+      <button id="langKo" class="on" type="button" title="한국어">한국어</button>
+      <button id="langEn" type="button" title="English">EN</button>
+    </div>
+  </div>
+  <div class="statusrail">
+    <span id="status" class="statusline" role="status" aria-live="polite">wasm 로딩 중…</span>
+  </div>
 </header>
 
-<main>
-  <!-- always visible: the instrument -->
-  <section class="rig">
-    <div class="top">
-      <div class="blk">
-        <div class="wheels" id="wheels"></div>
-        <div class="scr">
-          <canvas id="screen" width="240" height="240"></canvas>
-          <div class="nav" id="nav"></div>
+<main class="page" id="top">
+
+  <!-- 01: the instrument ---------------------------------------------------->
+  <section class="section section--instrument" id="instrument" aria-labelledby="titlePlay">
+    <header class="section-head">
+      <p class="kicker"><span class="kicker-index">01</span><span id="eyebrowPlay">PICO-8 / SMK-37 PRO</span></p>
+      <h2 id="titlePlay">신디사이저가 게임기가 된다.</h2>
+      <p class="section-desc" id="descPlay">SMK-37 Pro의 건반·패드·페이더로 PICO-8 카트를 플레이한다. picovave는 이 악기에서 PICO-8을 구동하고, SysEx로 새 카트를 넣는 펌웨어다.</p>
+    </header>
+
+    <div class="instrument">
+      <div class="chassis">
+        <div class="top">
+          <div class="blk">
+            <section class="module wheels-module" aria-labelledby="lblWheels">
+              <div class="module-head">
+                <span class="module-label" id="lblWheels">휠</span>
+                <span class="module-meta">PITCH / MOD</span>
+              </div>
+              <div class="wheels" id="wheels"></div>
+            </section>
+
+            <section class="module display-module" aria-labelledby="lblDisplay">
+              <div class="module-head">
+                <span class="module-label" id="lblDisplay">화면</span>
+                <span class="module-meta" id="metaDisplay">PICO-8 · 240 × 240</span>
+              </div>
+              <div class="scr">
+                <div class="screen-bezel">
+                  <canvas id="screen" width="240" height="240" aria-label="PICO-8 디스플레이"></canvas>
+                </div>
+                <div class="nav" id="nav"></div>
+              </div>
+            </section>
+          </div>
+
+          <section class="module encoders-module" aria-labelledby="lblEncoders">
+            <div class="module-head">
+              <span class="module-label" id="lblEncoders">엔코더 · 패드</span>
+              <span class="module-meta" id="metaEncoders">K1–K8 / 패드 16</span>
+            </div>
+            <div class="mid" id="mid"></div>
+          </section>
+
+          <section class="module mix-module" aria-labelledby="lblMix">
+            <div class="module-head">
+              <span class="module-label" id="lblMix">페이더 · 버튼</span>
+              <span class="module-meta" id="metaMix">F1–F4 / 2 × 6</span>
+            </div>
+            <div class="rgt">
+              <div class="faders" id="faders"></div>
+              <div class="grid6" id="grid6"></div>
+            </div>
+          </section>
+        </div>
+
+        <section class="module keybed-module" aria-labelledby="lblKeybed">
+          <div class="module-head">
+            <span class="module-label" id="lblKeybed">건반</span>
+            <span class="module-meta" id="metaKeybed">37 건반 · C–C</span>
+          </div>
+          <div class="keys-wrap"><div class="keys" id="keys"></div></div>
+        </section>
+
+        <div class="transport">
+          <span class="transport-label" id="lblTransport">트랜스포트</span>
+          <div class="transport-actions">
+            <button id="boot" class="pri" type="button">POWER-ON</button>
+            <button id="sound" type="button">SOUND</button>
+            <button id="refresh" class="ghost" type="button">TICK</button>
+          </div>
+          <details class="stats" id="stats" open>
+            <summary id="statssum">상태</summary>
+            <div class="meter">
+              <span><span id="lblDraws">갱신</span> <b id="draws">-</b></span>
+              <span><span id="lblBoots">루프</span> <b id="boots">-</b></span>
+              <span><span id="lblMs">시간</span> <b id="ms">-</b></span>
+              <span><span id="lblBytes">바이트</span> <b id="bytes">-</b></span>
+              <span>WDT <b id="wdt">-</b></span>
+            </div>
+          </details>
         </div>
       </div>
-      <div class="mid" id="mid"></div>
-      <div class="rgt"><div class="faders" id="faders"></div><div class="grid6" id="grid6"></div></div>
-    </div>
-    <div class="keys" id="keys"></div>
-    <div class="ctl">
-      <button id="boot" class="pri">POWER-ON</button>
-      <button id="sound">SOUND</button>
-      <button id="refresh" class="ghost">TICK</button>
-      <details class="stats" id="stats">
-        <summary>상태</summary>
-        <div class="meter">
-          <span>갱신 <b id="draws">-</b></span>
-          <span>루프 <b id="boots">-</b></span>
-          <span>시간 <b id="ms">-</b></span>
-          <span>바이트 <b id="bytes">-</b></span>
-          <span>WDT <b id="wdt">-</b></span>
-        </div>
-      </details>
     </div>
   </section>
 
-  <!-- always visible, never folded: install, flash, carts, the log -->
-  <section class="box" id="devbox">
-    <h2>DEVICE · 플래시 / 카트</h2>
-    <div class="body">
-      <div class="devrow">
-        <span>설치된 앱 <b id="device">PICOVAVE</b></span>
-        <span>identity <b id="devid">-</b></span>
-        <span>flash <b id="devsize">0x100000 (1 MB)</b></span>
-        <span>app 슬롯 <b id="devapp">-</b></span>
-        <span>보호영역 <b id="devprot">-</b></span>
+  <!-- 02: install, flash, carts --------------------------------------------->
+  <section class="section section--device" id="device-panel" aria-labelledby="titleDevice">
+    <header class="section-head">
+      <p class="kicker"><span class="kicker-index">02</span><span id="eyebrowDevice">DEVICE / FIRMWARE</span></p>
+      <h2 id="titleDevice">펌웨어와 카트리지</h2>
+      <p class="section-desc" id="descDevice">실기와 같은 빌드를 설치하거나, PICO-8 카트를 기기에 넣는다. 패키지 검증·기기 적합성·전송 상태가 작업 흐름 안에 그대로 남는다.</p>
+    </header>
+
+    <section class="devbox" id="devbox" aria-labelledby="devtitle">
+      <div class="devbar">
+        <h3 id="devtitle">DEVICE · 플래시 / 카트</h3>
+        <div class="devrow">
+          <span><span id="lblInstalled">설치된 앱</span> <b id="device">PICOVAVE</b></span>
+          <span>identity <b id="devid">-</b></span>
+          <span>flash <b id="devsize">0x100000 (1 MB)</b></span>
+          <span><span id="lblAppSlot">app 슬롯</span> <b id="devapp">-</b></span>
+          <span><span id="lblProtected">보호영역</span> <b id="devprot">-</b></span>
+        </div>
       </div>
 
-      <div class="prog"><div class="bar" id="progbar"><i></i></div><span id="progtext">대기</span></div>
+      <div class="devbody">
+        <section class="transfer-panel" aria-labelledby="lblTransfer">
+          <div class="panel-head">
+            <span id="lblTransfer">전송</span>
+            <span id="progtext">대기</span>
+          </div>
+          <div class="prog"><div class="bar" id="progbar"><i></i></div></div>
+        </section>
 
-      <div class="ctl">
-        <button id="simPicovave" class="on">SIMULATOR picovave.fwsc</button>
-        <label id="drop">원복용 .fwsc 선택 / 끌어다 놓기<input type="file" id="v016" accept=".fwsc"></label>
-        <button id="simRestore" class="ghost">SIMULATOR 복원</button>
-        <a id="dlPicovave" class="ghost" href="./picovave.fwsc" download>picovave.fwsc 내려받기</a>
+        <div class="workgrid">
+          <section class="station station--sim" aria-labelledby="lblSim">
+            <header class="station-head">
+              <span class="station-no">01</span>
+              <div>
+                <h4 id="lblSim">시뮬레이터에 설치</h4>
+                <p id="descSim">.fwsc를 검증하고 브라우저의 모델 플래시에 적용한다. USB로는 아무것도 전송하지 않는다.</p>
+              </div>
+            </header>
+            <div class="ctl">
+              <button id="simPicovave" class="pri on" type="button">SIMULATOR picovave.fwsc</button>
+              <label id="drop"><span id="lblDrop">원복용 .fwsc 선택 / 끌어다 놓기</span><input type="file" id="v016" accept=".fwsc"></label>
+              <button id="simRestore" class="ghost" type="button">SIMULATOR 복원</button>
+              <a id="dlPicovave" class="ghost" href="./picovave.fwsc" download>picovave.fwsc 내려받기</a>
+            </div>
+          </section>
+
+          <section class="station station--usb" aria-labelledby="lblUsb">
+            <header class="station-head">
+              <span class="station-no">02</span>
+              <div>
+                <h4 id="lblUsb">실기에 설치</h4>
+                <p id="descUsb">USB MIDI로 연결된 SMK-37 Pro에 같은 패키지를 쓴다. Chrome(HTTPS 또는 localhost)과 MIDI 권한이 필요하다.</p>
+              </div>
+            </header>
+            <div class="ctl">
+              <button id="flashPicovave" class="danger" type="button">FLASH(USB) picovave.fwsc</button>
+              <button id="flashRestore" class="ghost" type="button">FLASH(USB) 복원</button>
+              <div class="field">
+                <label class="field-label" id="lblMidiPort" for="midiport">MIDI 포트</label>
+                <select id="midiport" title="FLASH(USB) 가 쓸 MIDI 포트"></select>
+              </div>
+              <button id="midiscan" class="ghost" type="button">MIDI 포트 진단</button>
+            </div>
+            <p class="station-hint" id="usbHint">포트가 보이지 않으면 MIDI 포트 진단을 실행한다. 모든 포트에 handshake를 보내 응답한 포트를 선택한다.</p>
+          </section>
+
+          <section class="station station--cart" aria-labelledby="lblCart">
+            <header class="station-head">
+              <span class="station-no">03</span>
+              <div>
+                <h4 id="lblCart">카트리지 슬롯</h4>
+                <p id="descCart">.p8.png 카트 하나를 올린다. 커밋 전에 기기의 실제 메모리 풀에서 실행해 적합성을 잰다.</p>
+              </div>
+            </header>
+            <div class="ctl">
+              <label id="cartdrop"><span id="lblCartDrop">카트 <code>.p8.png</code> 선택 / 끌어다 놓기</span><input type="file" id="cartp8" accept=".p8.png"></label>
+              <div class="field">
+                <label class="field-label" id="lblCartTarget" for="cartmode">대상</label>
+                <select id="cartmode" title="카트를 넣을 곳">
+                  <option id="optSim" value="sim">SIMULATOR (웹 wasm 저장소)</option>
+                  <option id="optUsb" value="usb">FLASH(USB) (실기 SLOOP)</option>
+                </select>
+              </div>
+              <button id="cartSend" class="pri" type="button">SIMULATOR 카트(.p8.png) 업로드</button>
+              <button id="cartErase" class="ghost" type="button">SIMULATOR 슬롯 비우기</button>
+            </div>
+          </section>
+        </div>
+
+        <div class="cart-status">
+          <span class="label" id="lblCartStatus">카트리지</span>
+          <b id="cartsay">-</b>
+        </div>
+
+        <div class="readouts">
+          <section class="readout" aria-labelledby="lblPackage">
+            <h4 id="lblPackage">패키지 검증</h4>
+            <pre id="pkg">패키지 확인 중…</pre>
+          </section>
+          <section class="readout" aria-labelledby="lblLog">
+            <h4 id="lblLog">전송 로그</h4>
+            <pre id="flashlog"></pre>
+          </section>
+        </div>
       </div>
-
-      <div class="ctl">
-        <button id="flashPicovave" class="danger">FLASH(USB) picovave.fwsc</button>
-        <button id="flashRestore" class="ghost">FLASH(USB) 복원</button>
-        <select id="midiport" title="FLASH(USB) 가 쓸 MIDI 포트"></select>
-        <button id="midiscan" class="ghost">MIDI 포트 진단</button>
-      </div>
-
-      <div class="ctl">
-        <label id="cartdrop">카트 <code>.p8.png</code> 선택 / 끌어다 놓기<input type="file" id="cartp8" accept=".p8.png"></label>
-        <select id="cartmode" title="카트를 넣을 곳">
-          <option value="sim">SIMULATOR (웹 wasm 저장소)</option>
-          <option value="usb">FLASH(USB) (실기 SLOOP)</option>
-        </select>
-        <button id="cartSend" class="pri">SIMULATOR 카트(.p8.png) 업로드</button>
-        <button id="cartErase" class="ghost">SIMULATOR 슬롯 비우기</button>
-      </div>
-      <b id="cartsay">-</b>
-
-      <pre id="pkg">패키지 확인 중…</pre>
-      <pre id="flashlog"></pre>
-    </div>
+    </section>
   </section>
 
-  <!-- only when opened: the manual -->
-  <details class="box" id="helpbox">
-    <summary>도움말 · 키 매핑</summary>
-    <div class="body help">
-      패널은 SMK-37 Pro 그대로 — 휠(PITCH·MOD) · 화면과 그 아래 6버튼 · K1..K8 과 16 패드 ·
-      페이더와 2×6 버튼 · 건반 — 이고, picovave 가 <b>PICO-8 카트</b>를 실행한다.<br>
-      <b>처음 아무 곳이나 클릭</b>하면 오디오 클럭(워클릿)에서 실행된다. 마우스/터치: 패드(shift = 약하게),
-      건반, 노브(위/아래 드래그), 버튼, 휠, 페이더.<br>
-      <b>PICO-8 조작</b>은 여덟 개다 — 카트가 읽는 여섯 개(<code>↑ ← ↓ →</code> 방향패드 ·
-      <code>⬥</code>(Z) · <code>❎</code>(X)) · <code>🌵</code>(Start — 카트가 <code>btn(6)</code>으로 읽는다) ·
-      <code>⬜</code>(엔진이 직접 처리: 실행 중인 카트를 다시 시작). 여덟 개 모두 <b>패드에 적어둔 그대로</b>다.
-      같은 여덟 개가 건반에도
-      있다 — 가장 낮은 옥타브의 <code>F G</code>=← · <code>G# A#</code>=↑ · <code>A</code>=↓ ·
-      <code>B C</code>=→, 그리고 맨 위 옥타브의 <code>G</code>=⬜ · <code>G#</code>=🌵 ·
-      <code>A</code>=⬥ · 맨 위의 <code>C</code>=❎.
-      (고정은 아니다: <code>src/picovave_p8.h</code> 의 <code>pv_gamepad()</code> 가 그 답이다.)<br>
-      컴퓨터 키보드는 <b>PICO-8 기본키 그대로</b> 매핑된다 — <code>방향키</code>=방향패드 ·
-      <code>Z</code>=⬥ · <code>X</code>=❎ · <code>ENTER</code>=🌵 · <code>ESC</code>=⬜. 패널에 적힌
-      그 패드를 직접 누르는 것과 같은 입력이다(눌린 패드도 같이 켜진다). 🌵 은 PICO-8 의 Start 그
-      자체로 카트에 도착하고(<code>btn(6)</code>), ⬜ 은 카트가 읽는 버튼이 아니라 엔진이 처리한다 —
-      실행 중인 카트를 abort 하고 그 카트를 다시 시작시킨다(<code>femto8/src/p8_emu.c</code> 의
-      <code>p8_check_for_pause()</code>).<br>
-      악기로서: <code>A W S E D F T G Y H U J K</code> 건반 · <code>, / .</code> 옥타브 ·
-      <code>1..8</code> 페이더 아래 2×6 버튼판의 첫 여덟 개.<br>
-      <b>POWER-ON</b> 은 설치된 앱을 다시 켜고, <b>TICK</b> 은 무음 실행에서 루프를 한 바퀴 더 돈다.
-      <b>SOUND</b> 는 음소거 토글.<br>
-      <b>SIMULATOR</b> 는 빌드를 웹에 바로 적용하고(같은 소스의 wasm 이 곧 기기다),
-      <b>FLASH(USB)</b> 는 연결된 실기에 쓴다 — Chrome(https/localhost)과 MIDI 권한이 필요하고,
-      기기를 못 찾으면 <b>MIDI 포트 진단</b>이 어느 포트가 응답하는지 알려준다.<br>
-      <b>카트</b>는 <code>.p8.png</code> 하나만 받는다. 올리기 전에 기기의 아레나·allocator 그대로
-      실제로 돌려 <b>기기에서 실행되는지</b>를 재고(빠듯하면 확인을 받는다), 커밋되면 그 카트로 다시 부팅한다.
-    </div>
-  </details>
+  <!-- 03: the manual -------------------------------------------------------->
+  <section class="section section--manual" id="manual" aria-labelledby="titleManual">
+    <header class="section-head">
+      <p class="kicker"><span class="kicker-index">03</span><span id="eyebrowManual">MANUAL / REFERENCE</span></p>
+      <h2 id="titleManual">운영 매뉴얼</h2>
+      <p class="section-desc" id="descManual">조작, 키 매핑, 기기 작업을 읽기 좋은 순서로 정리했다. 왼쪽 목차에서 한 답을 바로 찾을 수 있다.</p>
+    </header>
+
+    <section class="manual-shell" id="helpbox">
+      <div class="docs-layout">
+        <aside class="docs-toc">
+          <span class="toc-label" id="tocLabel">목차</span>
+          <nav aria-label="매뉴얼 목차 / Contents">
+            <a href="#manual-start" id="tocStart">빠른 시작</a>
+            <a href="#manual-controls" id="tocControls">PICO-8 조작</a>
+            <a href="#manual-keyboard" id="tocKeyboard">컴퓨터 키보드</a>
+            <a href="#manual-instrument" id="tocInstrument">악기 연주</a>
+            <a href="#manual-device" id="tocDevice">기기 · 카트</a>
+            <a href="#manual-recovery" id="tocRecovery">주의 · 복구</a>
+          </nav>
+        </aside>
+        <article class="docs help">
+          <p class="docs-overline" id="helpsumm">도움말 · 키 매핑</p>
+          <div id="helpbody">
+            <h3 id="manual-start">빠른 시작</h3>
+            <p>패널은 SMK-37 Pro 그대로다. <b>처음 아무 곳이나 클릭</b>하면 오디오 클럭이 시작되고, picovave가 PICO-8 카트를 실행한다. 마우스와 터치로 패드·건반·노브·버튼·휠·페이더를 조작한다.</p>
+            <div class="callout"><b>오디오 시작</b><p>브라우저의 자동재생 정책 때문에 첫 클릭 전에는 무음 실행기로 동작한다. 클릭하면 워클릿이 오디오 클럭을 넘겨받는다.</p></div>
+            <h3 id="manual-controls">PICO-8 조작</h3>
+            <p>패드와 건반은 같은 일곱 개 입력을 공유한다 — 방향패드, O, X, Pause. 각 입력은 패드와 건반에 같은 아이콘으로 찍혀 있다.</p>
+            <h3 id="manual-keyboard">컴퓨터 키보드</h3>
+            <p>PICO-8 기본키 그대로 매핑된다. 방향키, <code>Z</code>, <code>X</code>, <code>ENTER</code>/<code>P</code>가 패널의 같은 입력을 만든다.</p>
+            <h3 id="manual-instrument">악기 연주</h3>
+            <p><code>A W S E D F T G Y H U J K</code>가 건반, <code>,</code>와 <code>.</code>가 옥타브, <code>1..8</code>이 페이더 아래 버튼판의 첫 여덟 개다.</p>
+            <h3 id="manual-device">기기 · 카트</h3>
+            <p>SIMULATOR는 웹에 적용하고, FLASH(USB)는 연결된 실기에 쓴다. 카트는 <code>.p8.png</code> 하나만 받으며 커밋 전에 기기 적합성을 측정한다.</p>
+            <h3 id="manual-recovery">주의 · 복구</h3>
+            <p>패키지 검증이 먼저 실행되며, 보호영역은 설치가 건드리지 않는다. MIDI 포트가 보이지 않으면 데이터 케이블과 다른 앱의 포트 점유를 확인한다.</p>
+          </div>
+        </article>
+      </div>
+    </section>
+  </section>
 </main>
+
+<footer class="sitefooter">
+  <span class="footer-brand">PICOVAVE</span>
+  <span id="footerNote">기기·시뮬레이터·호스트 프리뷰가 같은 엔진을 실행한다.</span>
+  <a href="#instrument" id="footerTop">플레이로 돌아가기 ↑</a>
+</footer>
+
 
 <script type="module">
 import { toRGBA, W, H } from "./picovave_render.js";
@@ -326,6 +837,11 @@ const raf = (typeof requestAnimationFrame === "function") ? requestAnimationFram
 const caf = (typeof cancelAnimationFrame === "function") ? cancelAnimationFrame : (id) => clearTimeout(id);
 const mk = (cls, html) => { const e = document.createElement("div"); if (cls) e.className = cls; if (html !== undefined) e.innerHTML = html; return e; };
 
+/* The panel's PICO-8 controls, drawn once in the page's own sprite (see the SVG at the top of
+ * the body). A control is an icon - the arrows, O, X, Pause - never a text glyph, so the
+ * pad faces and the manual read the same everywhere. */
+const ic = (name) => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ic-${name}"/></svg>`;
+
 const canvas = $("screen");
 const ctx = canvas.getContext("2d", { alpha: false });
 const img = ctx.createImageData(W, H);
@@ -333,18 +849,716 @@ const rgba = new Uint8ClampedArray(W * H * 4);
 const status = $("status");
 let paints = 0, frames = 0;
 
-function fail(msg) { status.textContent = msg; status.className = "err"; }
-function ok(msg) { status.textContent = msg; status.className = ""; }
+// ============================================================================
+// Language: every word this page says lives here twice. Korean is the default,
+// because that is the instrument's own language; English is one click away and
+// the choice is remembered (and can be forced with ?lang=en / ?lang=ko).
+// Dynamic text goes through t(); static text is applied by renderStatic().
+// ============================================================================
+const I18N = {
+  ko: {
+    pageTitle: "picovave — SMK-37 Pro의 PICO-8",
+    loading: "wasm 로딩 중…",
+    stats: "상태", draws: "갱신", boots: "루프", ms: "시간", bytes: "바이트",
+    deviceTitle: "DEVICE · 플래시 / 카트",
+    installed: "설치된 앱", appSlot: "app 슬롯", protected: "보호영역",
+    idle: "대기",
+    drop: "원복용 .fwsc 선택 / 끌어다 놓기",
+    simRestore: "SIMULATOR 복원",
+    download: "picovave.fwsc 내려받기",
+    flashRestore: "FLASH(USB) 복원",
+    midiPortTitle: "FLASH(USB) 가 쓸 MIDI 포트",
+    midiScan: "MIDI 포트 진단",
+    cartDrop: "카트 <code>.p8.png</code> 선택 / 끌어다 놓기",
+    optSim: "SIMULATOR (웹 wasm 저장소)",
+    optUsb: "FLASH(USB) (실기 SLOOP)",
+    cartModeTitle: "카트를 넣을 곳",
+    packageChecking: "패키지 확인 중…",
+    helpsumm: "도움말 · 키 매핑",
+    dash: "-",
+
+    skip: "플레이로 건너뛰기",
+    navPlay: "플레이", navDevice: "기기 · 카트", navManual: "매뉴얼",
+    eyebrowPlay: "PICO-8 / SMK-37 PRO", titlePlay: "신디사이저가 게임기가 된다.",
+    descPlay: "SMK-37 Pro의 건반·패드·페이더로 PICO-8 카트를 플레이한다. picovave는 이 악기에서 PICO-8을 구동하고, SysEx로 새 카트를 넣는 펌웨어다.",
+    lblWheels: "휠", lblDisplay: "화면", metaDisplay: "PICO-8 · 240 × 240",
+    lblEncoders: "엔코더 · 패드", metaEncoders: "K1–K8 / 패드 16",
+    lblMix: "페이더 · 버튼", metaMix: "F1–F4 / 2 × 6",
+    lblKeybed: "건반", metaKeybed: "37 건반 · C–C",
+    lblTransport: "트랜스포트",
+    eyebrowDevice: "DEVICE / FIRMWARE", titleDevice: "펌웨어와 카트리지",
+    descDevice: "실기와 같은 빌드를 설치하거나, PICO-8 카트를 기기에 넣는다. 패키지 검증·기기 적합성·전송 상태가 작업 흐름 안에 그대로 남는다.",
+    lblTransfer: "전송",
+    lblSim: "시뮬레이터에 설치",
+    descSim: ".fwsc를 검증하고 브라우저의 모델 플래시에 적용한다. USB로는 아무것도 전송하지 않는다.",
+    lblUsb: "실기에 설치",
+    descUsb: "USB MIDI로 연결된 SMK-37 Pro에 같은 패키지를 쓴다. Chrome(HTTPS 또는 localhost)과 MIDI 권한이 필요하다.",
+    usbHint: "포트가 보이지 않으면 MIDI 포트 진단을 실행한다. 모든 포트에 handshake를 보내 응답한 포트를 선택한다.",
+    lblMidiPort: "MIDI 포트",
+    lblCart: "카트리지 슬롯",
+    descCart: ".p8.png 카트 하나를 올린다. 커밋 전에 기기의 실제 메모리 풀에서 실행해 적합성을 잰다.",
+    lblCartTarget: "대상", lblCartStatus: "카트리지",
+    lblPackage: "패키지 검증", lblLog: "전송 로그",
+    eyebrowManual: "MANUAL / REFERENCE", titleManual: "운영 매뉴얼",
+    descManual: "조작, 키 매핑, 기기 작업을 읽기 좋은 순서로 정리했다. 왼쪽 목차에서 한 답을 바로 찾을 수 있다.",
+    tocLabel: "목차", tocStart: "빠른 시작", tocControls: "PICO-8 조작",
+    tocKeyboard: "컴퓨터 키보드", tocInstrument: "악기 연주",
+    tocDevice: "기기 · 카트", tocRecovery: "주의 · 복구",
+    footerNote: "기기·시뮬레이터·호스트 프리뷰가 같은 엔진을 실행한다.",
+    footerTop: "플레이로 돌아가기 ↑",
+    motoForeign: "외부 ROM · 브라우저에서 pi32v2 실행 불가",
+    help: `<h3 id="manual-start">빠른 시작</h3>
+<p>패널은 SMK-37 Pro 그대로다 — 휠(PITCH·MOD) · 화면과 그 아래 6버튼 · K1..K8과 16 패드 · 페이더와 2×6 버튼 · 37건반. picovave가 <b>PICO-8 카트</b>를 실행한다.</p>
+<div class="callout"><b>오디오 시작</b><p><b>처음 아무 곳이나 클릭</b>하면 오디오 클럭(워클릿)에서 실행된다. 브라우저의 자동재생 정책 때문에 첫 클릭 전에는 무음 실행기로 동작한다.</p></div>
+<p>마우스/터치: 패드(shift = 약하게) · 건반 · 노브(위/아래 드래그) · 버튼 · 휠 · 페이더. 화면 아래 여섯 버튼과 페이더 아래 2×6 버튼은 패널에 인쇄된 기능을 그대로 따른다.</p>
+
+<h3 id="manual-controls">PICO-8 조작</h3>
+<p>패드와 건반은 같은 일곱 개 입력을 공유한다 — 방향패드, O, X, Pause. 각 입력은 패드와 건반에 같은 아이콘으로 찍혀 있다.</p>
+<div class="table-wrap"><table class="keymap">
+<thead><tr><th>조작</th><th>패드</th><th>건반</th><th>컴퓨터</th></tr></thead>
+<tbody>
+<tr><td>방향패드</td><td>${ic("up")}${ic("left")}${ic("down")}${ic("right")}</td><td>낮은 <code>F G</code> · <code>G# A#</code> · <code>A</code> · <code>B C</code></td><td><code>방향키</code></td></tr>
+<tr><td>O</td><td>${ic("o")}</td><td>맨 위 <code>A</code></td><td><code>Z</code></td></tr>
+<tr><td>X</td><td>${ic("x")}</td><td>맨 위 <code>C</code></td><td><code>X</code></td></tr>
+<tr><td>Pause</td><td>${ic("pause")}</td><td>맨 위 <code>G#</code></td><td><code>ENTER</code> / <code>P</code></td></tr>
+</tbody></table></div>
+<p><b>Pause</b>는 PICO-8의 6번 버튼 자체다 — 카트가 <code>btn(6)</code>으로 직접 읽는다. 이 포트에서 <code>p8_show_pause_menu()</code>는 스텁이라 내장 메뉴는 뜨지 않는다. PICO-8에는 별도의 재시작 버튼이 없으므로 패널에도 두지 않는다. 고정 매핑은 <code>src/picovave_p8.h</code>의 <code>pv_gamepad()</code>가 답이다.</p>
+
+<h3 id="manual-keyboard">컴퓨터 키보드</h3>
+<p>PICO-8 기본키 그대로 매핑된다. 패널에 적힌 패드를 직접 누르는 것과 같은 입력이며, 눌린 패드도 같이 켜진다.</p>
+<div class="table-wrap"><table class="keymap">
+<thead><tr><th>입력</th><th>키</th></tr></thead>
+<tbody>
+<tr><td>PICO-8 방향패드</td><td><code>방향키</code></td></tr>
+<tr><td>O · X · Pause</td><td><code>Z</code> · <code>X</code> · <code>ENTER</code>/<code>P</code></td></tr>
+<tr><td>건반</td><td><code>A W S E D F T G Y H U J K</code></td></tr>
+<tr><td>옥타브</td><td><code>,</code> / <code>.</code></td></tr>
+<tr><td>페이더 아래 첫 여덟 버튼</td><td><code>1..8</code></td></tr>
+</tbody></table></div>
+
+<h3 id="manual-instrument">악기 연주</h3>
+<p>건반은 화면의 37건반과 같은 입력을 보낸다. 노브는 위/아래로 드래그하고, 휠은 PITCH가 중앙으로 스프링백하며 MOD는 위로 올릴수록 값이 커진다. 페이더와 2×6 버튼은 패널에 인쇄된 순서를 따른다.</p>
+<p><b>POWER-ON</b>은 설치된 앱을 다시 켜고, <b>TICK</b>은 무음 실행에서 루프를 한 바퀴 더 돈다. <b>SOUND</b>는 음소거 토글이다.</p>
+
+<h3 id="manual-device">기기 · 카트</h3>
+<p><b>SIMULATOR</b>는 빌드를 웹에 바로 적용한다. 같은 소스의 wasm이 곧 기기이므로, 여기서 도는 것과 실기에서 도는 것은 같은 코드다.</p>
+<p><b>FLASH(USB)</b>는 연결된 실기에 쓴다. Chrome(HTTPS 또는 localhost)과 MIDI 권한이 필요하다.</p>
+<div class="callout warn"><b>USB MIDI</b><p>기기를 찾지 못하면 <b>MIDI 포트 진단</b>이 모든 포트에 handshake를 보내 응답한 포트를 선택한다. 데이터 케이블인지, 다른 앱(에디터·DAW)이 포트를 잡고 있지 않은지, 기기 전원이 켜져 있는지 확인한다.</p></div>
+<p><b>카트</b>는 <code>.p8.png</code> 하나만 받는다. 올리기 전에 기기의 아레나·allocator 그대로 실제로 돌려 <b>기기에서 실행되는지</b>를 재고, 빠듯하면 확인을 받는다. 커밋되면 그 카트로 다시 부팅한다.</p>
+
+<h3 id="manual-recovery">주의 · 복구</h3>
+<ul>
+<li>설치 전에 패키지 검증(header · file-list · flash.bin CRC)이 먼저 실행된다. 검증에 실패한 패키지는 쓰지 않는다.</li>
+<li>보호영역(VM · BTIF · USRTRIM · USRFLASH · USR · key_mac)은 설치가 건드리지 않는다.</li>
+<li>기기가 카트를 감당하지 못하면 기본/이전 카트로 폴백하고 멈추지 않는다.</li>
+<li>MIDI 포트가 보이지 않으면 데이터 케이블, 다른 앱의 포트 점유, 기기 전원을 차례로 확인한다.</li>
+<li>브라우저에서 소리가 나지 않으면 페이지를 한 번 클릭해 오디오 클럭을 시작한다.</li>
+</ul>`,
+
+    runningSoundRate: "실행 중 · {label} · 사운드 {rate} Hz",
+    workletError: "워클릿 오류: {msg}",
+    stockInstalled: "STOCK ROM 설치됨 · 시뮬레이터는 실행할 수 없다 (실기 전용)",
+    offDevice: "현재 설치된 앱은 브라우저에서 실행할 수 없다 (STOCK) · FLASH picovave.fwsc",
+    runningBuilt: "실행 중 · {label} · {mode} · 설치된 패키지와 같은 소스에서 빌드된 wasm",
+    modeSound: "사운드",
+    modeWaiting: "오디오 대기 — 아무 곳이나 클릭",
+    modeSilent: "무음",
+    audioStarting: "오디오 시작 중…",
+    audioStartError: "오디오를 시작할 수 없다: {msg}",
+    audioWaiting: "실행 중 · {label} · 오디오 대기 — 아무 곳이나 클릭하세요",
+    runningSound: "실행 중 · {label} · 사운드 {rate} Hz",
+    packagePrepared: "원복/설치용 패키지 준비됨: {product} — SIMULATOR 또는 FLASH(USB) 를 누르세요",
+    userPackage: "사용자 패키지",
+    packageUnreadable: "패키지를 읽을 수 없다: {msg}",
+    missingPicovave: "picovave.fwsc 가 아직 없다 — tools/build_sim.py 를 실행할 것",
+    needRestore: "원복/설치용 .fwsc 를 먼저 고르거나 끌어다 놓으세요",
+    restoreLabel: "복원",
+    bootMissing: "wasm 을 불러올 수 없다 — tools/build_sim.py 를 실행할 것",
+    missingBuilds: "{status} · 없음: {missing}",
+    noServedPackages: "서빙된 패키지 없음 — tools/build_sim.py 실행",
+    pkgHelpTail: "(설치/복원하면 아래 로그에 전체 검증이 나온다)",
+    notAvailable: "없음",
+
+    simStartLog: "{label}: identity \"{product}\" · blocks {blocks} · {nfiles} files · chip {chip}",
+    simCrcLog: "  header CRC {hdr} · file-list CRC {list} · declared size {size}",
+    noFlashBinLog: "  flash.bin 없음 → 설치하지 않는다",
+    noFlashBin: "패키지에 flash.bin이 없다",
+    flashBinLog: "  flash.bin {len} B · CRC {crc}",
+    verifyFailLog: "  검증 실패 → 쓰지 않는다",
+    verifyFail: "패키지 검증 실패 (CRC)",
+    writeLog: "  flash 0x00000..0x{wrote} 작성 (head + app 슬롯)",
+    extraFilesLog: "  그 밖의 파일 {n}개(ota.bin 등)는 업데이터 입력 — flash 이미지 모델에는 미포함",
+    protectedLog: "  보호영역 {result}",
+    protectedHit: "침범: {list}",
+    protectedSafe: "침범 없음 → {list}",
+    rebootWasmLog: "  재부팅 → {label} wasm (같은 소스) 실행",
+    rebootForeignLog: "  재부팅 → 실기 전용 ROM, 브라우저 실행 불가",
+    installDone: "설치 완료 · 0x{wrote} B",
+
+    autoFind: "기기 자동 찾기",
+    noOutput: "{name}  (출력 없음)",
+    probeNotFamily: "  (패밀리 아님)",
+    probeOutput: "[출력: {out}]",
+    probeNone: "없음",
+    probeResponse: "응답: \"{id}\"",
+    probeSendFailed: "보내기 실패: {err}",
+    probeNoResponse: "응답 없음",
+    probeBytes: "  (바이트 {n}개)",
+    scanTitle: "MIDI 포트 진단… (모든 포트에 handshake 질의; 패밀리 포트부터)",
+    noWebMidiLog: "  이 브라우저에는 Web MIDI 가 없다 (Chrome, https/localhost)",
+    noWebMidi: "Web MIDI 없음",
+    midiPermissionDenied: "MIDI 권한이 거부되었다",
+    noInputLog: "  MIDI 입력 포트가 없다 — 케이블/전원을 확인",
+    noInput: "MIDI 입력 포트가 없다",
+    inputPorts: "  입력 {n}개: {list}",
+    outputPorts: "  출력 {n}개: {list}",
+    noHandshake: "  어떤 포트도 handshake 에 응답하지 않는다.",
+    cableCheck: "  확인: USB 데이터 케이블인가(충전 전용·BLE 아닌가), 다른 앱(에디터·DAW)이 포트를 잡고 있지 않은가, 기기 전원.",
+    noResponding: "응답하는 MIDI 포트가 없다",
+    selectedPortLog: "  → {name} 를 선택했다 (FLASH(USB) 가 이 포트로 쓴다).",
+    scanDone: "MIDI 포트 진단 완료 · 응답: {name} ({id})",
+
+    flashBusy: "FLASH(USB) 가 이미 진행 중이다",
+    flashStartLog: "FLASH(USB) {label} → USB-MIDI SysEx (tools/fm1_install.py 와 같은 프로토콜)",
+    unflashable: "플래시할 수 없는 패키지다",
+    flashImageLog: "  identity \"{product}\" · 이미지 {len} B · CRC ok",
+    noWebMidiOpen: "  Web MIDI 없음 — Chrome 을 https / localhost 로 열 것",
+    noWebMidiStatus: "이 브라우저에는 Web MIDI 가 없다",
+    connectingMidi: "MIDI 연결 중…",
+    midiPermissionRequest: "  MIDI 권한 요청 중… (주소창 알림을 허용)",
+    findingDevice: "  기기를 찾는 중…{port}",
+    selectedPort: " (선택한 포트 {port})",
+    querying: "    {n} … 질의",
+    selectedSilent: "  선택한 포트가 응답하지 않는다 — 나머지 패밀리 포트도 시도",
+    selectedNoAnswer: "  선택한 포트 {port} 가 응답하지 않는다 — 모든 MIDI 포트 진단:",
+    autoNotFound: "  자동으로 찾지 못했다 — 모든 MIDI 포트 진단:",
+    inputList: "  입력: {list}",
+    outputList: "  출력: {list}",
+    respondedSelect: "  → {name} 가 응답했다 — 선택했다. FLASH(USB) 를 다시 누르세요.",
+    noPortAnswers: "  어떤 포트도 응답하지 않는다. 확인: USB 데이터 케이블인가(충전 전용·BLE 아닌가),",
+    otherAppHolding: "  다른 앱(에디터·DAW)이 포트를 잡고 있지 않은가, 기기 전원과 케이블.",
+    hitRetry: "{name} 가 응답한다 — 선택했으니 다시 시도하세요",
+    selectedNotAnswer: "선택한 포트 {port} 가 응답하지 않는다",
+    noDevicePick: "기기를 찾지 못했다 — 목록에서 직접 고르세요",
+    deviceLoaderMode: " · 이미 업데이트 모드",
+    checkingReads: "확인 중 · {reads} reads",
+    packageCheckingLog: "  패키지 확인 중… {reads} reads",
+    writing: "쓰는 중 {pct}%",
+    writingLog: "  쓰는 중 {pct}%",
+    updateStart: "업데이트 시작 ({phase})",
+    updateLoader: "업데이트 로더로 전환",
+    updateReboot: "재시작 대기",
+    updateDone: "완료: {phase}",
+    successExec: "  ✓ 기기가 {back} 을 실행한다",
+    flashDone: "FLASH(USB) 완료 · {back}",
+    failed: "실패",
+    flashFailed: "FLASH(USB) 실패: {msg}",
+    devicePort: "  기기 {id} · 포트 {name}",
+    midiBusy: "FLASH(USB) 가 이미 진행 중이다",
+
+    fitPeak: "peak {peak} KB / 기기 풀 {pool} KB",
+    fitFirstFrames: "첫 {n}프레임",
+    fitFrames: "{n}프레임",
+    fitNoRun: " · ✗ 기기 불가: 카트가 기기 아레나에서 실행되지 않았다 (status {status} · {peak})",
+    fitThrash: " · ⚠ 기기 불가(끊김): {howlong} 측정에서 기기 allocator가 {refused}회 거부했다 — GC 가 계속 끼어든다 ({peak})",
+    fitTight: " · ⚠ 기기 빠듯: {howlong} 측정에서 {refused}회 거부 (가끔 끊길 수 있다 · {peak})",
+    fitCost: " · ⚠ 기기 불가(비용 모델): 보수적 비용 모델의 {peak} — 이 빌드는 arena 없는 cost model 이라 거부를 세지 못한다. 실기에서 돌 수도 있다",
+    fitEarly: " · ⚠ 기기 판정 보류: 측정이 {frames}프레임에서 멈췄다 (거부 0회 · {peak})",
+    fitOk: " · ✓ 기기 OK: {frames}프레임 측정에서 거부 0회 ({peak})",
+
+    replyNoResponse: "응답 없음",
+    replyOk: "OK {n}",
+    replyErr: "ERR {n} ({text})",
+    replyInfo: "INFO {n}",
+    cartErrBegin: "BEGIN 아님", cartErrCrc: "CRC 불일치", cartErrRange: "범위 밖",
+    cartErrBig: "너무 큼", cartErrEmpty: "비어 있음", cartErrSlot: "슬롯", cartErrFormat: "카트 형식 아님",
+    cartTargetUp: "{target} 카트(.p8.png) 업로드",
+    cartTargetErase: "{target} 슬롯 비우기",
+    cartNot: "{name} ({size} B) 은 카트가 아니다: {msg} — PICO-8 의 .p8.png 를 쓸 것",
+    bytecode: " · 바이트코드 {len} B",
+    bytecodeBig: " · 바이트코드 {len} B > 슬롯 {max} B → 소스로 업로드",
+    cartInspecting: "{name} · 160x205 해독 · {len} B (쿠킹 32,800){compile} · 기기 적합성 측정 중…",
+    cartInfo: "{name} · 160x205 해독 · {len} B (쿠킹 32,800){compile}{fit}",
+    cartReadyWarn: "{name} 준비됨 — {fit} · 대상 {target} · 카트 업로드를 누르세요",
+    cartReadyTight: "{name} 준비됨 — 그러나 기기(SMK-37 Pro) 판정이 좋지 않다: {fit} · 대상 {target} 을 확인하고 올릴 것",
+    cartReadyOk: "{name} 준비됨 — 쿠킹 카트 {len} B (마법 + ROM 17,152 + 코드 15,648) · {fit} · 대상 {target} · 카트 업로드를 누르세요",
+    needCart: "카트 .p8.png 를 먼저 고르거나 끌어다 놓으세요",
+    noRunningDevice: "실행 중인 기기가 없다",
+    simCartLog: "SIMULATOR 카트 · {name} · {len} B · 슬롯 {slot} · {frames} 프레임 (BEGIN + DATA×{data} + END)",
+    frameCounter: "프레임 {i}/{n}",
+    simCartActive: "  → {reply} · 활성 슬롯 {slot}",
+    simCartProtocol: "  장치의 SysEx 프로토콜(src/picovave_cart.h)이 파싱 · 커밋되면 그 카트로 재부팅한다",
+    simCartSay: "{name} · 슬롯 {slot} 실행 중 (웹){fit}",
+    simCartDone: "SIMULATOR 카트 업로드 완료 · {name} · 슬롯 {slot} ({reply})",
+    simWorkletSent: "  → 워클릿(오디오 실행기)으로 프레임을 보냈다 — 응답은 아래 로그에 이어진다",
+    cartWebMidiMissing: "이 브라우저에는 Web MIDI 가 없다 — Chrome 을 https / localhost 로 열 것",
+    cartConfirm: "{name} 은 기기(SMK-37 Pro)에서 빠듯하거나 실행되지 않는다:\n\n{fit}\n\n그래도 실기에 올릴까? 기기는 기본/이전 카트로 폴백하므로 멈추지는 않는다.",
+    cartCancelled: "FLASH(USB) 카트 업로드 취소 — 기기가 감당하지 못한 카트",
+    usbCartLog: "FLASH(USB) 카트 · {name} · {len} B · 슬롯 {slot} · {frames} 프레임 (BEGIN + DATA×{data} + END)",
+    sendingFrames: "  {n} 프레임을 보낸다 (펌웨어의 BEGIN/DATA/END)…",
+    commitReboot: "  커밋되면 기기는 그 카트로 다시 부팅한다 (칩 리셋이 아니라 실행만 다시 시작)",
+    usbCartSay: "{name} · 슬롯 {slot} 실행 중 (실기){fit}",
+    usbCartDone: "FLASH(USB) 카트 업로드 완료 · {name} · 슬롯 {slot} ({reply})",
+    usbCartFailed: "FLASH(USB) 카트 실패: {msg}",
+    eraseUsbLog: "FLASH(USB) 슬롯 비우기 · ERASE 0",
+    erasedUsb: "슬롯 비움 → 기본 카트 (실기)",
+    eraseUsbDone: "FLASH(USB) 슬롯 비우기 → 기본 카트 ({reply})",
+    eraseUsbFailed: "FLASH(USB) 슬롯 비우기 실패: {msg}",
+    erasedWeb: "슬롯 비움 → 기본 카트 (웹)",
+    eraseSlotDone: "슬롯 비움",
+    eraseWebDone: "SIMULATOR 슬롯 비우기 → 기본 카트 ({reply})",
+    onCartReply: "슬롯 {slot} 실행 중 · {reply}",
+    onCartOk: "카트 실행 중 · 슬롯 {slot} ({reply}) · 사운드",
+    cartTargetSet: "카트 대상: {target} {note}",
+    cartTargetUsbNote: "(연결된 실기 · Web MIDI 필요)",
+    cartTargetSimNote: "(웹 wasm 저장소)",
+    defaultCart: "기본",
+    frameReplyMissing: "프레임 {i}/{n} 에 응답이 없다",
+    deviceDisconnected: "기기가 끊겼다",
+    midiPermRequestShort: "  MIDI 권한 요청 중… (주소창 알림을 허용)",
+    noAnswerDevice: "  응답하는 기기가 없다 — 케이블·전원을 확인하거나 MIDI 포트 진단을 쓸 것",
+    deviceNotFound: "기기를 찾지 못했다",
+    probeDevicePort: "  기기 {id} · 포트 {name}",
+
+    foreignNoBrowser: "브라우저 실행 불가",
+    foreignDeviceOnly: "실기 전용 (pi32v2)",
+    pkgHeader: "{name} · identity \"{product}\" · blocks {blocks} · chip {chip} · {nfiles} files",
+    pkgCrc: "header CRC {hdr} · file-list CRC {list} · declared size {size}",
+  },
+  en: {
+    pageTitle: "picovave — PICO-8 on the SMK-37 Pro",
+    loading: "Loading wasm…",
+    stats: "Stats", draws: "draws", boots: "loops", ms: "time", bytes: "bytes",
+    deviceTitle: "DEVICE · flash / carts",
+    installed: "installed app", appSlot: "app slot", protected: "protected",
+    idle: "Idle",
+    drop: "Choose or drop a restore .fwsc",
+    simRestore: "SIMULATOR restore",
+    download: "Download picovave.fwsc",
+    flashRestore: "FLASH(USB) restore",
+    midiPortTitle: "MIDI port FLASH(USB) will use",
+    midiScan: "Diagnose MIDI ports",
+    cartDrop: "Choose or drop a cart <code>.p8.png</code>",
+    optSim: "SIMULATOR (web wasm store)",
+    optUsb: "FLASH(USB) (device SLOOP)",
+    cartModeTitle: "Where the cart goes",
+    packageChecking: "Checking package…",
+    helpsumm: "Help · key map",
+    dash: "-",
+
+    skip: "Skip to play",
+    navPlay: "Play", navDevice: "Device & carts", navManual: "Manual",
+    eyebrowPlay: "PICO-8 / SMK-37 PRO", titlePlay: "The synth becomes the console.",
+    descPlay: "Play PICO-8 carts with the SMK-37 Pro's keys, pads and faders. picovave is the firmware that runs PICO-8 on the instrument and loads new carts over SysEx.",
+    lblWheels: "Wheels", lblDisplay: "Display", metaDisplay: "PICO-8 · 240 × 240",
+    lblEncoders: "Encoders + pads", metaEncoders: "K1–K8 / 16 pads",
+    lblMix: "Faders + buttons", metaMix: "F1–F4 / 2 × 6",
+    lblKeybed: "Keybed", metaKeybed: "37 keys · C–C",
+    lblTransport: "Transport",
+    eyebrowDevice: "DEVICE / FIRMWARE", titleDevice: "Firmware & cartridges",
+    descDevice: "Install the same build the hardware runs, or move a PICO-8 cart onto the device. Package verification, compatibility and transfer state stay inside the workflow.",
+    lblTransfer: "Transfer",
+    lblSim: "On this simulator",
+    descSim: "Verify a .fwsc and apply it to the browser's modelled flash. Nothing is sent over USB.",
+    lblUsb: "On hardware",
+    descUsb: "Write the same package to a connected SMK-37 Pro over USB MIDI. Chrome on HTTPS or localhost, plus MIDI permission, is required.",
+    usbHint: "No port? Run Diagnose MIDI ports. It probes every port and selects the one that answers.",
+    lblMidiPort: "MIDI port",
+    lblCart: "Cartridge slot",
+    descCart: "Upload one .p8.png cart. The page measures it against the device's own memory pool before committing it.",
+    lblCartTarget: "Destination", lblCartStatus: "Cartridge",
+    lblPackage: "Package verification", lblLog: "Transfer log",
+    eyebrowManual: "MANUAL / REFERENCE", titleManual: "Operating manual",
+    descManual: "Controls, key maps and device work arranged for reading — and for finding one answer quickly from the contents rail.",
+    tocLabel: "Contents", tocStart: "Quick start", tocControls: "PICO-8 controls",
+    tocKeyboard: "Computer keyboard", tocInstrument: "Playing the instrument",
+    tocDevice: "Device & carts", tocRecovery: "Notes & recovery",
+    footerNote: "Device, simulator and host preview run the same engine.",
+    footerTop: "Back to play ↑",
+    motoForeign: "foreign ROM · browser cannot execute pi32v2",
+    help: `<h3 id="manual-start">Quick start</h3>
+<p>The panel is the SMK-37 Pro as it is — wheels (PITCH·MOD), the screen and its six buttons, K1..K8 over 16 pads, the faders and 2×6 buttons, and the 37-key bed. picovave runs a <b>PICO-8 cart</b>.</p>
+<div class="callout"><b>Start the audio</b><p><b>Click anywhere once</b> to run it from the audio clock (the worklet). Until that click, browser autoplay policy keeps it in the silent runner.</p></div>
+<p>Mouse/touch: pads (shift = soft), keys, knobs (drag up/down), buttons, wheels, faders. The six buttons under the screen and the 2×6 row under the faders follow the functions printed on the panel.</p>
+
+<h3 id="manual-controls">PICO-8 controls</h3>
+<p>The pads and the keybed share the same seven inputs — D-pad, O, X, Pause. Each input is printed where it lives, as the same icon on both.</p>
+<div class="table-wrap"><table class="keymap">
+<thead><tr><th>Control</th><th>Pad</th><th>Keybed</th><th>Computer</th></tr></thead>
+<tbody>
+<tr><td>D-pad</td><td>${ic("up")}${ic("left")}${ic("down")}${ic("right")}</td><td>low <code>F G</code> · <code>G# A#</code> · <code>A</code> · <code>B C</code></td><td><code>arrows</code></td></tr>
+<tr><td>O</td><td>${ic("o")}</td><td>top <code>A</code></td><td><code>Z</code></td></tr>
+<tr><td>X</td><td>${ic("x")}</td><td>top <code>C</code></td><td><code>X</code></td></tr>
+<tr><td>Pause</td><td>${ic("pause")}</td><td>top <code>G#</code></td><td><code>ENTER</code> / <code>P</code></td></tr>
+</tbody></table></div>
+<p><b>Pause</b> is PICO-8's button 6 itself — a cart reads it directly as <code>btn(6)</code>. <code>p8_show_pause_menu()</code> is a stub in this port, so no built-in menu appears. PICO-8 has no separate restart control, so the panel carries none. The fixed mapping is whatever <code>pv_gamepad()</code> in <code>src/picovave_p8.h</code> says.</p>
+
+<h3 id="manual-keyboard">Computer keyboard</h3>
+<p>The computer keyboard maps <b>PICO-8's own default keys</b>. It is the same input as pressing the printed pad, and the pad lights too.</p>
+<div class="table-wrap"><table class="keymap">
+<thead><tr><th>Input</th><th>Key</th></tr></thead>
+<tbody>
+<tr><td>PICO-8 D-pad</td><td><code>arrows</code></td></tr>
+<tr><td>O · X · Pause</td><td><code>Z</code> · <code>X</code> · <code>ENTER</code>/<code>P</code></td></tr>
+<tr><td>Keybed</td><td><code>A W S E D F T G Y H U J K</code></td></tr>
+<tr><td>Octave</td><td><code>,</code> / <code>.</code></td></tr>
+<tr><td>First eight buttons under the faders</td><td><code>1..8</code></td></tr>
+</tbody></table></div>
+
+<h3 id="manual-instrument">Playing the instrument</h3>
+<p>The keybed sends the same input as the 37 keys on screen. Drag knobs up/down; PITCH springs back to centre and MOD increases as it is raised. The faders and 2×6 buttons follow the order printed on the panel.</p>
+<p><b>POWER-ON</b> boots the installed app again; <b>TICK</b> advances the silent runner by one loop. <b>SOUND</b> toggles mute.</p>
+
+<h3 id="manual-device">Device &amp; carts</h3>
+<p><b>SIMULATOR</b> applies the build on the web. The wasm from the same sources is the device, so what runs here and what runs on hardware are the same code.</p>
+<p><b>FLASH(USB)</b> writes it to a connected device. Chrome (HTTPS or localhost) and MIDI permission are required.</p>
+<div class="callout warn"><b>USB MIDI</b><p>If the device is not found, <b>Diagnose MIDI ports</b> probes every port and selects the one that answers. Check the cable is a data cable, that no other app (editor, DAW) is holding the port, and that the device is powered.</p></div>
+<p><b>Carts</b> are <code>.p8.png</code> only. Before uploading, the page runs the cart on the device's own arena and allocator to measure <b>whether the device can run it</b> (and asks for confirmation if it is tight). Once committed, the device reboots into that cart.</p>
+
+<h3 id="manual-recovery">Notes &amp; recovery</h3>
+<ul>
+<li>Package verification (header · file-list · flash.bin CRC) runs first. A package that fails verification is never written.</li>
+<li>The installer never touches the protected regions (VM · BTIF · USRTRIM · USRFLASH · USR · key_mac).</li>
+<li>If the device cannot hold a cart, it falls back to the default/previous cart instead of stopping.</li>
+<li>If no MIDI port appears, check the data cable, whether another app holds the port, and the device power.</li>
+<li>If the browser is silent, click the page once to start the audio clock.</li>
+</ul>`,
+
+    runningSoundRate: "Running · {label} · sound {rate} Hz",
+    workletError: "Worklet error: {msg}",
+    stockInstalled: "STOCK ROM installed · the simulator cannot run it (device-only)",
+    offDevice: "The installed app cannot run in the browser (STOCK) · FLASH picovave.fwsc",
+    runningBuilt: "Running · {label} · {mode} · wasm built from the same sources as the installed package",
+    modeSound: "sound",
+    modeWaiting: "audio waiting — click anywhere",
+    modeSilent: "silent",
+    audioStarting: "Starting audio…",
+    audioStartError: "Cannot start audio: {msg}",
+    audioWaiting: "Running · {label} · audio waiting — click anywhere",
+    runningSound: "Running · {label} · sound {rate} Hz",
+    packagePrepared: "Restore/install package ready: {product} — press SIMULATOR or FLASH(USB)",
+    userPackage: "user package",
+    packageUnreadable: "Cannot read the package: {msg}",
+    missingPicovave: "picovave.fwsc is not available yet — run tools/build_sim.py",
+    needRestore: "Choose or drop a restore/install .fwsc first",
+    restoreLabel: "restore",
+    bootMissing: "Cannot load wasm — run tools/build_sim.py",
+    missingBuilds: "{status} · missing: {missing}",
+    noServedPackages: "No packages served — run tools/build_sim.py",
+    pkgHelpTail: "(install/restore shows the full verification in the log below)",
+    notAvailable: "none",
+
+    simStartLog: "{label}: identity \"{product}\" · blocks {blocks} · {nfiles} files · chip {chip}",
+    simCrcLog: "  header CRC {hdr} · file-list CRC {list} · declared size {size}",
+    noFlashBinLog: "  no flash.bin → not installing",
+    noFlashBin: "The package has no flash.bin",
+    flashBinLog: "  flash.bin {len} B · CRC {crc}",
+    verifyFailLog: "  verification failed → not writing",
+    verifyFail: "Package verification failed (CRC)",
+    writeLog: "  wrote flash 0x00000..0x{wrote} (head + app slot)",
+    extraFilesLog: "  {n} other file(s) (ota.bin etc.) are updater input — not in the modelled flash image",
+    protectedLog: "  protected regions {result}",
+    protectedHit: "overlap: {list}",
+    protectedSafe: "none touched → {list}",
+    rebootWasmLog: "  reboot → running {label} wasm (same sources)",
+    rebootForeignLog: "  reboot → device-only ROM, cannot run in the browser",
+    installDone: "Installed · 0x{wrote} B",
+
+    autoFind: "Find device automatically",
+    noOutput: "{name}  (no output)",
+    probeNotFamily: "  (not family)",
+    probeOutput: "[output: {out}]",
+    probeNone: "none",
+    probeResponse: "reply: \"{id}\"",
+    probeSendFailed: "send failed: {err}",
+    probeNoResponse: "no reply",
+    probeBytes: "  ({n} bytes)",
+    scanTitle: "Diagnosing MIDI ports… (handshake every port, family ports first)",
+    noWebMidiLog: "  This browser has no Web MIDI (Chrome, https/localhost)",
+    noWebMidi: "No Web MIDI",
+    midiPermissionDenied: "MIDI permission was denied",
+    noInputLog: "  No MIDI input ports — check the cable and power",
+    noInput: "No MIDI input ports",
+    inputPorts: "  {n} input(s): {list}",
+    outputPorts: "  {n} output(s): {list}",
+    noHandshake: "  No port answered the handshake.",
+    cableCheck: "  Check: is it a USB data cable (not charge-only or BLE), is another app (editor/DAW) holding the port, and is the device powered?",
+    noResponding: "No MIDI port answered",
+    selectedPortLog: "  → selected {name} (FLASH(USB) will use this port).",
+    scanDone: "MIDI port diagnostic complete · reply: {name} ({id})",
+
+    flashBusy: "FLASH(USB) is already running",
+    flashStartLog: "FLASH(USB) {label} → USB-MIDI SysEx (the same protocol as tools/fm1_install.py)",
+    unflashable: "This package cannot be flashed",
+    flashImageLog: "  identity \"{product}\" · image {len} B · CRC ok",
+    noWebMidiOpen: "  no Web MIDI — open Chrome over https / localhost",
+    noWebMidiStatus: "This browser has no Web MIDI",
+    connectingMidi: "Connecting MIDI…",
+    midiPermissionRequest: "  Requesting MIDI permission… (allow the address-bar prompt)",
+    findingDevice: "  Finding device…{port}",
+    selectedPort: " (selected port {port})",
+    querying: "    {n} … querying",
+    selectedSilent: "  The selected port did not answer — trying the rest of the family",
+    selectedNoAnswer: "  Selected port {port} did not answer — diagnosing every MIDI port:",
+    autoNotFound: "  Auto-find found nothing — diagnosing every MIDI port:",
+    inputList: "  inputs: {list}",
+    outputList: "  outputs: {list}",
+    respondedSelect: "  → {name} answered — selected. Press FLASH(USB) again.",
+    noPortAnswers: "  No port answered. Check: is it a USB data cable (not charge-only or BLE),",
+    otherAppHolding: "  is another app (editor/DAW) holding the port, and is the device powered and connected?",
+    hitRetry: "{name} answers — it is selected; try again",
+    selectedNotAnswer: "Selected port {port} did not answer",
+    noDevicePick: "No device found — choose one from the list",
+    deviceLoaderMode: " · already in update mode",
+    checkingReads: "Checking · {reads} reads",
+    packageCheckingLog: "  Checking package… {reads} reads",
+    writing: "Writing {pct}%",
+    writingLog: "  Writing {pct}%",
+    updateStart: "Update started ({phase})",
+    updateLoader: "Switching to update loader",
+    updateReboot: "Waiting for restart",
+    updateDone: "Done: {phase}",
+    successExec: "  ✓ the device will run {back}",
+    flashDone: "FLASH(USB) complete · {back}",
+    failed: "Failed",
+    flashFailed: "FLASH(USB) failed: {msg}",
+    devicePort: "  device {id} · port {name}",
+    midiBusy: "FLASH(USB) is already running",
+
+    fitPeak: "peak {peak} KB / device pool {pool} KB",
+    fitFirstFrames: "first {n} frames",
+    fitFrames: "{n} frames",
+    fitNoRun: " · ✗ device cannot run: the cart did not run in the device arena (status {status} · {peak})",
+    fitThrash: " · ⚠ device cannot run (hitches): the device allocator refused {refused} times over {howlong} — GC keeps getting in the way ({peak})",
+    fitTight: " · ⚠ device is tight: {refused} refusal(s) over {howlong} (may hitch occasionally · {peak})",
+    fitCost: " · ⚠ device cannot run (cost model): the conservative model says {peak} — this build has no arena, so refusals cannot be counted. It may still run on hardware",
+    fitEarly: " · ⚠ device verdict incomplete: measurement stopped at frame {frames} (0 refusals · {peak})",
+    fitOk: " · ✓ device OK: 0 refusals over {frames} ({peak})",
+
+    replyNoResponse: "no reply",
+    replyOk: "OK {n}",
+    replyErr: "ERR {n} ({text})",
+    replyInfo: "INFO {n}",
+    cartErrBegin: "not BEGIN", cartErrCrc: "CRC mismatch", cartErrRange: "out of range",
+    cartErrBig: "too large", cartErrEmpty: "empty", cartErrSlot: "slot", cartErrFormat: "not a cart",
+    cartTargetUp: "Upload cart (.p8.png) to {target}",
+    cartTargetErase: "Erase {target} slot",
+    cartNot: "{name} ({size} B) is not a cart: {msg} — use a PICO-8 .p8.png",
+    bytecode: " · bytecode {len} B",
+    bytecodeBig: " · bytecode {len} B > slot {max} B → uploading source",
+    cartInspecting: "{name} · decoded 160x205 · {len} B (cooked 32,800){compile} · measuring device fit…",
+    cartInfo: "{name} · decoded 160x205 · {len} B (cooked 32,800){compile}{fit}",
+    cartReadyWarn: "{name} ready — {fit} · target {target} · press cart upload",
+    cartReadyTight: "{name} ready — but the device (SMK-37 Pro) verdict is poor: {fit} · check target {target} before uploading",
+    cartReadyOk: "{name} ready — cooked cart {len} B (magic + ROM 17,152 + code 15,648) · {fit} · target {target} · press cart upload",
+    needCart: "Choose or drop a cart .p8.png first",
+    noRunningDevice: "No running device",
+    simCartLog: "SIMULATOR cart · {name} · {len} B · slot {slot} · {frames} frames (BEGIN + DATA×{data} + END)",
+    frameCounter: "frame {i}/{n}",
+    simCartActive: "  → {reply} · active slot {slot}",
+    simCartProtocol: "  parsed by the device's SysEx protocol (src/picovave_cart.h) · a commit reboots into that cart",
+    simCartSay: "{name} · slot {slot} running (web){fit}",
+    simCartDone: "SIMULATOR cart upload complete · {name} · slot {slot} ({reply})",
+    simWorkletSent: "  → frames were sent to the worklet (audio runner) — replies continue in the log below",
+    cartWebMidiMissing: "This browser has no Web MIDI — open Chrome over https / localhost",
+    cartConfirm: "{name} is tight or will not run on the device (SMK-37 Pro):\n\n{fit}\n\nUpload it to the hardware anyway? The device falls back to its default/previous cart, so it will not stop.",
+    cartCancelled: "FLASH(USB) cart upload cancelled — the device cannot hold this cart",
+    usbCartLog: "FLASH(USB) cart · {name} · {len} B · slot {slot} · {frames} frames (BEGIN + DATA×{data} + END)",
+    sendingFrames: "  sending {n} frames (the firmware's BEGIN/DATA/END)…",
+    commitReboot: "  On commit the device boots this cart again (a restart, not a chip reset)",
+    usbCartSay: "{name} · slot {slot} running (device){fit}",
+    usbCartDone: "FLASH(USB) cart upload complete · {name} · slot {slot} ({reply})",
+    usbCartFailed: "FLASH(USB) cart failed: {msg}",
+    eraseUsbLog: "FLASH(USB) erase slot · ERASE 0",
+    erasedUsb: "Slot erased → default cart (device)",
+    eraseUsbDone: "FLASH(USB) slot erased → default cart ({reply})",
+    eraseUsbFailed: "FLASH(USB) slot erase failed: {msg}",
+    erasedWeb: "Slot erased → default cart (web)",
+    eraseSlotDone: "Slot erased",
+    eraseWebDone: "SIMULATOR slot erased → default cart ({reply})",
+    onCartReply: "Slot {slot} running · {reply}",
+    onCartOk: "Cart running · slot {slot} ({reply}) · sound",
+    cartTargetSet: "Cart target: {target} {note}",
+    cartTargetUsbNote: "(connected device · Web MIDI required)",
+    cartTargetSimNote: "(web wasm store)",
+    defaultCart: "default",
+    frameReplyMissing: "No reply to frame {i}/{n}",
+    deviceDisconnected: "The device disconnected",
+    midiPermRequestShort: "  Requesting MIDI permission… (allow the address-bar prompt)",
+    noAnswerDevice: "  No device answered — check the cable and power, or use Diagnose MIDI ports",
+    deviceNotFound: "No device found",
+    probeDevicePort: "  device {id} · port {name}",
+
+    foreignNoBrowser: "cannot run in browser",
+    foreignDeviceOnly: "device only (pi32v2)",
+    pkgHeader: "{name} · identity \"{product}\" · blocks {blocks} · chip {chip} · {nfiles} files",
+    pkgCrc: "header CRC {hdr} · file-list CRC {list} · declared size {size}",
+  },
+};
+
+function preferredLang() {
+  try {
+    const q = new URLSearchParams((typeof location !== "undefined" && location.search) || "").get("lang");
+    if (q === "ko" || q === "en") return q;
+  } catch (e) { /* no location (headless) */ }
+  try {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("picovave.lang");
+      if (saved === "ko" || saved === "en") return saved;
+    }
+  } catch (e) { /* no storage / private mode */ }
+  return "ko";
+}
+
+let lang = preferredLang();
+
+function t(key, vars) {
+  const table = I18N[lang] || I18N.ko;
+  let s = table[key] !== undefined ? table[key] : (I18N.ko[key] !== undefined ? I18N.ko[key] : key);
+  if (vars) s = String(s).replace(/\{(\w+)\}/g, (all, k) =>
+    (vars[k] !== undefined && vars[k] !== null) ? vars[k] : "");
+  return s;
+}
+
+let statusView = { cls: "", key: "loading", vars: {} };
+function renderStatus() {
+  const vars = Object.assign({}, statusView.vars);
+  if (vars.modeKey) vars.mode = t(vars.modeKey);
+  if (vars.fit !== undefined) vars.fit = fitText().slice(3);
+  status.textContent = t(statusView.key, vars);
+  status.className = statusView.cls;
+}
+function setStatus(cls, key, vars) {
+  statusView = { cls: cls || "", key, vars: vars || {} };
+  renderStatus();
+}
+function fail(key, vars) { setStatus("err", key, vars); }
+function ok(key, vars) { setStatus("", key, vars); }
 // Not a failure and not a success: something the user should see before acting (a cart that the
 // hardware cannot hold is perfectly good on the simulator).
-function warn(msg) { status.textContent = msg; status.className = "warn"; }
+function warn(key, vars) { setStatus("warn", key, vars); }
+
+let pkgView = { key: "packageChecking", vars: {} };
+let pkgShown = null;              // { pkg, name } - kept so the package list can change language
+let pkgHave = null;               // the served builds, also re-rendered on a language switch
+let cartSayView = { key: "dash", vars: {} };
+let progressView = { pct: null, key: "idle", vars: {} };
+function renderPkgView() {
+  let text;
+  if (pkgShown) text = pkgLines(pkgShown.pkg, pkgShown.name);
+  else if (pkgHave) text = (pkgHave.length ? pkgHave.join("\n") : t("noServedPackages")) + "\n" + t("pkgHelpTail");
+  else text = t(pkgView.key, pkgView.vars);
+  $("pkg").textContent = text;
+}
+function renderCartSay() {
+  // fitText() is a sentence, not a number: rebuild it when the language changes.
+  const vars = Object.assign({}, cartSayView.vars);
+  if (vars.fit !== undefined) vars.fit = fitText();
+  if (vars.compile !== undefined) vars.compile = compileText();
+  $("cartsay").textContent = t(cartSayView.key, vars);
+}
+function setCartSay(key, vars) { cartSayView = { key, vars: vars || {} }; renderCartSay(); }
+
+function renderStatic() {
+  try {
+    document.title = t("pageTitle");
+    if (document.documentElement) document.documentElement.lang = lang;
+  } catch (e) { /* headless has no documentElement */ }
+  $("langKo").classList.toggle("on", lang === "ko");
+  $("langEn").classList.toggle("on", lang === "en");
+  $("skipLink").textContent = t("skip");
+  $("navPlay").textContent = t("navPlay");
+  $("navDevice").textContent = t("navDevice");
+  $("navManual").textContent = t("navManual");
+  $("eyebrowPlay").textContent = t("eyebrowPlay");
+  $("titlePlay").textContent = t("titlePlay");
+  $("descPlay").textContent = t("descPlay");
+  $("lblWheels").textContent = t("lblWheels");
+  $("lblDisplay").textContent = t("lblDisplay");
+  $("metaDisplay").textContent = t("metaDisplay");
+  $("lblEncoders").textContent = t("lblEncoders");
+  $("metaEncoders").textContent = t("metaEncoders");
+  $("lblMix").textContent = t("lblMix");
+  $("metaMix").textContent = t("metaMix");
+  $("lblKeybed").textContent = t("lblKeybed");
+  $("metaKeybed").textContent = t("metaKeybed");
+  $("lblTransport").textContent = t("lblTransport");
+  $("eyebrowDevice").textContent = t("eyebrowDevice");
+  $("titleDevice").textContent = t("titleDevice");
+  $("descDevice").textContent = t("descDevice");
+  $("lblTransfer").textContent = t("lblTransfer");
+  $("lblSim").textContent = t("lblSim");
+  $("descSim").textContent = t("descSim");
+  $("lblUsb").textContent = t("lblUsb");
+  $("descUsb").textContent = t("descUsb");
+  $("usbHint").textContent = t("usbHint");
+  $("lblMidiPort").textContent = t("lblMidiPort");
+  $("lblCart").textContent = t("lblCart");
+  $("descCart").textContent = t("descCart");
+  $("lblCartTarget").textContent = t("lblCartTarget");
+  $("lblCartStatus").textContent = t("lblCartStatus");
+  $("lblPackage").textContent = t("lblPackage");
+  $("lblLog").textContent = t("lblLog");
+  $("eyebrowManual").textContent = t("eyebrowManual");
+  $("titleManual").textContent = t("titleManual");
+  $("descManual").textContent = t("descManual");
+  $("tocLabel").textContent = t("tocLabel");
+  $("tocStart").textContent = t("tocStart");
+  $("tocControls").textContent = t("tocControls");
+  $("tocKeyboard").textContent = t("tocKeyboard");
+  $("tocInstrument").textContent = t("tocInstrument");
+  $("tocDevice").textContent = t("tocDevice");
+  $("tocRecovery").textContent = t("tocRecovery");
+  $("footerNote").textContent = t("footerNote");
+  $("footerTop").textContent = t("footerTop");
+  $("statssum").textContent = t("stats");
+  $("lblDraws").textContent = t("draws");
+  $("lblBoots").textContent = t("boots");
+  $("lblMs").textContent = t("ms");
+  $("lblBytes").textContent = t("bytes");
+  $("devtitle").textContent = t("deviceTitle");
+  $("lblInstalled").textContent = t("installed");
+  $("lblAppSlot").textContent = t("appSlot");
+  $("lblProtected").textContent = t("protected");
+  $("lblDrop").textContent = t("drop");
+  $("simRestore").textContent = t("simRestore");
+  $("dlPicovave").textContent = t("download");
+  $("flashRestore").textContent = t("flashRestore");
+  $("midiport").title = t("midiPortTitle");
+  $("midiscan").textContent = t("midiScan");
+  $("lblCartDrop").innerHTML = t("cartDrop");
+  $("cartmode").title = t("cartModeTitle");
+  $("optSim").textContent = t("optSim");
+  $("optUsb").textContent = t("optUsb");
+  $("helpsumm").textContent = t("helpsumm");
+  $("helpbody").innerHTML = t("help");
+}
+
+function setLang(next, persist) {
+  next = next === "en" ? "en" : "ko";
+  lang = next;
+  if (persist !== false) {
+    try {
+      if (typeof window !== "undefined") localStorage.setItem("picovave.lang", lang);
+    } catch (e) { /* private mode */ }
+  }
+  renderStatic();
+  renderStatus();
+  renderPkgView();
+  renderCartSay();
+  renderProgress();
+  renderFirmware();
+  renderDevice();
+  renderCartTarget();
+  if (!fw) paintForeign();
+}
 
 // picovave. The package the device would flash and the wasm the panel runs come from the same
 // sources. A dropped package is matched to it by content (its flash.bin), not by name, so a
 // foreign ROM (the stock v016) is never mistaken for ours.
 const FW = {
   picovave: { label: "PICOVAVE", wasm: "./sim.wasm", pkg: "./picovave.fwsc",
-           moto: 'SMK-37 Pro · PICO-8' },
+           moto: 'PICO-8 console · SMK-37 Pro' },
 };
 
 // Cache-busting. hello and picovave were once served from the same URL (localhost:PORT/sim.wasm,
@@ -443,8 +1657,8 @@ const runner = () => (sound && wl && wl.node) ? wl : mtRunner;
 
 function onWl(m) {
   if (m.type === "frame") frame(m);
-  else if (m.type === "ready") ok("실행 중 · " + (fw ? FW[fw].label : "?") + " · 사운드 " + m.rate + " Hz");
-  else if (m.type === "error") fail("워클릿 오류: " + m.message);
+  else if (m.type === "ready") ok("runningSoundRate", { label: fw ? FW[fw].label : "?", rate: m.rate });
+  else if (m.type === "error") fail("workletError", { msg: m.message });
   else if (m.type === "cart") onCartReply(m);
 }
 
@@ -498,14 +1712,14 @@ function stats() {
 
 /* Draw a screen for an app the browser cannot run (a foreign ROM). */
 function paintForeign() {
-  const lines = [["STOCK ROM", "#ff3cd2"], ["브라우저 실행 불가", "#6f7c9a"],
-                 [device.identity || "-", "#3cf0ff"], ["실기 전용 (pi32v2)", "#6f7c9a"]];
+  const lines = [["STOCK ROM", "#ff3cd2"], [t("foreignNoBrowser"), "#6f7c9a"],
+                 [device.identity || "-", "#3cf0ff"], [t("foreignDeviceOnly"), "#6f7c9a"]];
   ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
   ctx.textAlign = "center";
   let y = 78, first = true;
-  for (const [t, c] of lines) {
+  for (const [text, c] of lines) {
     ctx.fillStyle = c; ctx.font = (first ? "bold 20px monospace" : "13px monospace");
-    ctx.fillText(t, W / 2, y); y += 34; first = false;
+    ctx.fillText(text, W / 2, y); y += 34; first = false;
   }
 }
 
@@ -513,7 +1727,7 @@ function paintForeign() {
 // The panel drives the same logical input the firmware reads from its matrix HAL.
 // ============================================================================
 const live = () => !!fw;
-function offDevice() { fail("현재 설치된 앱은 브라우저에서 실행할 수 없다 (STOCK) · FLASH picovave.fwsc"); }
+function offDevice() { fail("offDevice"); }
 
 function send(m) {
   if (!live()) return offDevice();
@@ -560,14 +1774,11 @@ for (let e = 0; e < 8; e++) {
 
 /* ---- the 16 pads: hardware 0..7 top row, 8..15 bottom row ----
  * What a pad does to a cart is not the page's invention. src/picovave_p8.h's pv_gamepad() is the
- * only thing that turns this panel into PICO-8 input, and it reads eight pads: 1/8/9/10 for the
- * D-pad, 15/14 for ⬥/❎ and 12/13 for ⬜/🌵 - the same eight it also takes from the keybed (see
- * P8_KEYBED below). Those eight carry the PICO-8 control they are; the other eight carry nothing,
- * because to a cart they are nothing. PICO-8's own default keys (the arrows, Z, X, ESC, ENTER)
- * come in on the PC keyboard as exactly these pads, so the label on a pad is also the key to
- * press for it. */
-const P8_PAD = { 1: "↑", 8: "←", 9: "↓", 10: "→", 15: "<b>⬥</b>Z", 14: "<b>❎</b>X",
-                 12: "<b>⬜</b>ESC", 13: "<b>🌵</b>⏎" };
+ * only thing that turns this panel into PICO-8 input, and the page prints the PICO-8 control a pad
+ * carries: 1/8/9/10 for the D-pad, 15/14 for O/X and 13 for Pause. That is the whole of PICO-8's
+ * controller; the other pads carry no PICO-8 control, so the page prints nothing on them. The control is
+ * printed as the page's own icon, and PICO-8's default PC keys drive exactly these pads. */
+const P8_PAD = { 1: "up", 8: "left", 9: "down", 10: "right", 15: "o", 14: "x", 13: "pause" };
 const padEl = [];
 function padHold(p, down, vel) {
   const el = padEl[p];
@@ -575,7 +1786,7 @@ function padHold(p, down, vel) {
   send({ type: "pad", pad: p, vel: down ? (vel || 110) : 0 });
 }
 for (let p = 0; p < 16; p++) {
-  const el = mk("pad", P8_PAD[p] ? `<i>${P8_PAD[p]}</i>` : "");
+  const el = mk("pad", P8_PAD[p] ? `<i>${ic(P8_PAD[p])}</i>` : "");
   el.id = "pad" + p;
   el.style.setProperty("--c", KC[p & 7]);
   el.addEventListener("pointerdown", (ev) => { if (el.setPointerCapture && ev.pointerId !== undefined) el.setPointerCapture(ev.pointerId); padHold(p, 1, ev.shiftKey ? 40 : 110); });
@@ -614,27 +1825,31 @@ function pitchHome() {
 }
 ["change", "pointerup", "pointercancel", "lostpointercapture", "blur"].forEach((e) => pitch.addEventListener(e, () => { if (+pitch.value !== 540) pitchHome(); }));
 addEventListener("pointerup", () => { if (pitchHeld) pitchHome(); });
-$("wheels").appendChild(pitch); $("wheels").appendChild(mk("lab", "PITCH"));
+const pitchWheel = mk("wheel");
+pitchWheel.appendChild(pitch); pitchWheel.appendChild(mk("lab", "PITCH"));
+$("wheels").appendChild(pitchWheel);
 
 const mod = document.createElement("input");
 mod.type = "range"; mod.min = "0"; mod.max = "130"; mod.value = "0"; mod.className = "v w"; mod.id = "mod";
 mod.addEventListener("input", (ev) => send({ type: "wheel", i: 1, raw: 615 - +ev.target.value }));
-$("wheels").appendChild(mod); $("wheels").appendChild(mk("lab", "MOD"));
+const modWheel = mk("wheel");
+modWheel.appendChild(mod); modWheel.appendChild(mk("lab", "MOD"));
+$("wheels").appendChild(modWheel);
 
 /* ---- the 37 keys, C..C, across the full width (black keys placed in % of it) ----
  * The keybed's share of the cart controls comes from the same pv_gamepad(): the low keys are the
- * D-pad and the top octave's G G# A and the top C are ⬜ / 🌵 / ⬥ / ❎. Key 0 is the lowest C, so
- * its high half is bit 32 and up: lo bit 31 = key 31, hi bit 0 = key 32, hi bit 1 = key 33,
- * hi bit 4 = key 36. They are printed on the keys, because that is where a player looks to find
- * them; the rest of the keybed is a keybed and carries nothing. */
-const P8_KEYBED = { 5: "←", 7: "←", 8: "↑", 9: "↓", 10: "↑", 11: "→", 12: "→",
-                    31: "⬜", 32: "🌵", 33: "⬥", 36: "❎" };
+ * D-pad and the top octave's G# A and top C are Pause / O / X. Key 0 is the lowest C, so its high
+ * half is bit 32 and up: hi bit 0 = key 32, hi bit 1 = key 33, hi bit 4 = key 36. They are printed
+ * on the keys, because that is where a player looks to find them; the rest of the keybed is a
+ * keybed and carries nothing. */
+const P8_KEYBED = { 5: "left", 7: "left", 8: "up", 9: "down", 10: "up", 11: "right", 12: "right",
+                    32: "pause", 33: "o", 36: "x" };
 const keyEl = [], WHITE = [0, 2, 4, 5, 7, 9, 11];
 let wx = 0;
 for (let k = 0; k < 37; k++) {
   const white = WHITE.includes(k % 12), el = mk("key " + (white ? "w" : "b"));
   el.id = "key" + k;
-  if (P8_KEYBED[k]) el.innerHTML = `<i>${P8_KEYBED[k]}</i>`;
+  if (P8_KEYBED[k]) el.innerHTML = `<i>${ic(P8_KEYBED[k])}</i>`;
   if (white) wx++;
   else { el.style.left = (wx / 22 - 0.31 / 22) * 100 + "%"; el.style.width = 0.62 / 22 * 100 + "%"; }
   el.addEventListener("pointerdown", (ev) => { if (el.setPointerCapture && ev.pointerId !== undefined) el.setPointerCapture(ev.pointerId); keyDown(k, 1); });
@@ -647,17 +1862,17 @@ function keyDown(k, d) { if (keyEl[k]) keyEl[k].classList.toggle("down", !!d); s
 
 /* ---- the computer keyboard ----
  * PICO-8's own default control keys, mapped onto the PC keyboard: the arrows ARE the D-pad,
- * Z / X ARE ⬥ / ❎ and ESC / ENTER ARE ⬜ / 🌵. They arrive as what the instrument itself would
- * deliver - the pads P8_PAD names, the ones pv_gamepad() reads for those controls - so an arrow
- * key lights the pad it drives and the cart cannot tell a PC key from a pad hit.
+ * Z / X ARE O / X and ENTER / P is Pause. They arrive as what the instrument itself would
+ * deliver - the pads P8_PAD names, the ones pv_gamepad() reads for those controls - so an
+ * arrow key lights the pad it drives and the cart cannot tell a PC key from a pad hit.
  * A W S E ... still plays the keybed. The octave shift is the page transposing the keybed, not
  * anything PICO-8 knows, so with Z and X given to the cart it moves to , and . .
- * ⬜ and 🌵 are PICO-8's other two. 🌵 arrives as PICO-8's own Start: p8_input.c turns it into
- * BUTTON_MASK_PAUSE, which a cart reads as btn(6). ⬜ is not a cart button - p8_emu.c's
- * p8_check_for_pause() aborts the running cart and the harness re-begins it. */
+ * Pause is PICO-8's sixth button: p8_input.c turns ENTER / P into BUTTON_MASK_PAUSE, which a cart
+ * reads as btn(6) (p8_show_pause_menu() is a stub here). PICO-8 has no separate restart control,
+ * so the page offers none and leaves ESC to the browser. */
 const KB = "awsedftgyhujk";
 const P8_PCKEY = { arrowup: 1, arrowleft: 8, arrowdown: 9, arrowright: 10, z: 15, x: 14,
-                   escape: 12, enter: 13 };
+                   enter: 13 };
 const held = {};                       // pc key -> the panel input it is holding down
 let kbo = 12;                          // the keybed's octave: a page-side transposition
 addEventListener("keydown", (ev) => {
@@ -721,7 +1936,7 @@ const yn = (b) => (b ? "ok" : "FAIL");
 function renderFirmware() {
   const f = fw ? FW[fw] : null;
   $("brand").textContent = f ? f.label : "STOCK";
-  $("moto").innerHTML = f ? f.moto : "foreign ROM · browser cannot execute pi32v2";
+  $("moto").textContent = f ? f.moto : t("motoForeign");
   $("simPicovave").classList.toggle("on", fw === "picovave");
 }
 
@@ -740,25 +1955,34 @@ function showLog(lines) {
 
 /* One bar for everything that takes time. pct === null means "working, no total yet": the fill
  * slides. The DEVICE box is always on the page, so the bar is never hidden behind a fold. */
-function setProgress(pct, text) {
+function renderProgress() {
   const bar = $("progbar");
   if (bar) {
     const fill = bar.firstChild;
-    if (fill && fill.style) fill.style.width = (pct == null ? 0 : Math.max(0, Math.min(100, pct))) + "%";
-    if (bar.classList) bar.classList.toggle("indet", pct == null);
+    if (fill && fill.style) fill.style.width = (progressView.pct == null ? 0 : Math.max(0, Math.min(100, progressView.pct))) + "%";
+    if (bar.classList) bar.classList.toggle("indet", progressView.pct == null);
   }
-  if (text != null) $("progtext").textContent = text;
+  $("progtext").textContent = t(progressView.key, progressView.vars);
+}
+function setProgress(pct, key, vars) {
+  progressView = { pct, key: key == null ? "idle" : key, vars: vars || {} };
+  renderProgress();
 }
 
-function renderPkg(pkg, name) {
+function pkgLines(pkg, name) {
   const h = pkg.header, lines = [
-    `${name} · identity "${pkg.product}" · blocks ${pkg.blocks} · chip ${h.chip} · ${h.nfiles} files`,
-    `header CRC ${yn(h.crcHdrOk)} · file-list CRC ${yn(h.crcListOk)} · declared size ${yn(h.totalOk)}`,
+    t("pkgHeader", { name, product: pkg.product, blocks: pkg.blocks, chip: h.chip, nfiles: h.nfiles }),
+    t("pkgCrc", { hdr: yn(h.crcHdrOk), list: yn(h.crcListOk), size: yn(h.totalOk) }),
   ];
   for (const f of pkg.files)
     lines.push(`  ${f.name.padEnd(16)} type ${f.type.toString(16).padStart(4, "0")} ` +
                `off 0x${f.offset.toString(16)} len ${f.length} CRC ${yn(f.crcOk)}`);
-  $("pkg").textContent = lines.join("\n");
+  return lines.join("\n");
+}
+function renderPkg(pkg, name) {
+  pkgShown = { pkg, name };
+  pkgHave = null;
+  renderPkgView();
 }
 
 function toggleHoldOff() { for (const el of btnEl) if (el) el.classList.remove("down"); for (const el of keyEl) if (el) el.classList.remove("down"); }
@@ -767,31 +1991,34 @@ function toggleHoldOff() { for (const el of btnEl) if (el) el.classList.remove("
  * firmware key, or null if the package is not one we can run (a foreign ROM). */
 function simulate(pkg, label, target) {
   const h = pkg.header, log = [];
-  log.push(`${label}: identity "${pkg.product}" · blocks ${pkg.blocks} · ${h.nfiles} files · chip ${h.chip}`);
-  log.push(`  header CRC ${yn(h.crcHdrOk)} · file-list CRC ${yn(h.crcListOk)} · declared size ${yn(h.totalOk)}`);
+  log.push(t("simStartLog", { label, product: pkg.product, blocks: pkg.blocks, nfiles: h.nfiles, chip: h.chip }));
+  log.push(t("simCrcLog", { hdr: yn(h.crcHdrOk), list: yn(h.crcListOk), size: yn(h.totalOk) }));
   const fb = pkg.files.find((f) => f.name === "flash.bin");
-  if (!fb) { log.push("  flash.bin 없음 → 설치하지 않는다"); showLog(log); fail("패키지에 flash.bin이 없다"); return false; }
-  log.push(`  flash.bin ${fb.length.toLocaleString()} B · CRC ${yn(fb.crcOk)}`);
+  if (!fb) { log.push(t("noFlashBinLog")); showLog(log); fail("noFlashBin"); return false; }
+  log.push(t("flashBinLog", { len: fb.length.toLocaleString(), crc: yn(fb.crcOk) }));
   if (!h.crcHdrOk || !h.crcListOk || !h.totalOk || !fb.crcOk) {
-    log.push("  검증 실패 → 쓰지 않는다"); showLog(log); fail("패키지 검증 실패 (CRC)"); return false;
+    log.push(t("verifyFailLog")); showLog(log); fail("verifyFail"); return false;
   }
   const end = Math.min(fb.length, FLASH_SIZE);
   const limit = PROTECTED.reduce((m, p) => Math.min(m, p[0]), FLASH_SIZE);  // first protected byte
   const wrote = Math.min(end, limit);
   flash.set(fb.data.subarray(0, wrote), 0);      // write only head+app; protected bytes are left alone
   const hit = PROTECTED.filter((p) => end > p[0]);
-  log.push(`  flash 0x00000..0x${wrote.toString(16)} 작성 (head + app 슬롯)`);
+  log.push(t("writeLog", { wrote: wrote.toString(16) }));
   if (pkg.files.length > 1)
-    log.push(`  그 밖의 파일 ${pkg.files.length - 1}개(ota.bin 등)는 업데이터 입력 — flash 이미지 모델에는 미포함`);
-  log.push(`  보호영역 ${hit.length ? "침범: " + hit.map((p) => p[1]).join(", ") : "침범 없음 → " + PROTECTED.map((p) => p[1]).join(" ")}`);
+    log.push(t("extraFilesLog", { n: pkg.files.length - 1 }));
+  log.push(t("protectedLog", {
+    result: hit.length ? t("protectedHit", { list: hit.map((p) => p[1]).join(", ") })
+                       : t("protectedSafe", { list: PROTECTED.map((p) => p[1]).join(" ") }),
+  }));
 
   toggleHoldOff();
   fw = target;
   device = { identity: pkg.product, end };
   runFirmware();
-  log.push(`  재부팅 → ${fw ? FW[fw].label + " wasm (같은 소스) 실행" : "실기 전용 ROM, 브라우저 실행 불가"}`);
+  log.push(fw ? t("rebootWasmLog", { label: FW[fw].label }) : t("rebootForeignLog"));
   showLog(log);
-  setProgress(100, `설치 완료 · 0x${wrote.toString(16)} B`);
+  setProgress(100, "installDone", { wrote: wrote.toString(16) });
   return true;
 }
 
@@ -805,8 +2032,8 @@ function refreshPortSelect(backend) {
   const opt = (value, text) => {
     const o = document.createElement("option"); o.value = value; o.textContent = text; sel.appendChild(o);
   };
-  opt("", "기기 자동 찾기");
-  for (const name of ins) opt(name, pairOutput(name, outs) ? name : name + "  (출력 없음)");
+  opt("", t("autoFind"));
+  for (const name of ins) opt(name, pairOutput(name, outs) ? name : t("noOutput", { name }));
   sel.value = ins.includes(midiPort) ? midiPort : "";
   midiPort = sel.value;
   return { ins, outs };
@@ -814,34 +2041,35 @@ function refreshPortSelect(backend) {
 
 // one probe result as a log line (used by the diagnostic and by a failed flash)
 const probeLine = (r) =>
-  `    ${r.name}${r.family ? "" : "  (패밀리 아님)"} [출력: ${r.out || "없음"}] … ` +
-  (r.id ? `응답: "${r.id.text}"`
-        : (r.sendErr ? `보내기 실패: ${r.sendErr}` : (r.err || "응답 없음")) + (r.raw ? `  (바이트 ${r.raw}개)` : ""));
+  `    ${r.name}${r.family ? "" : t("probeNotFamily")} ${t("probeOutput", { out: r.out || t("probeNone") })} … ` +
+  (r.id ? t("probeResponse", { id: r.id.text })
+        : (r.sendErr ? t("probeSendFailed", { err: r.sendErr }) : (r.err || t("probeNoResponse"))) +
+          (r.raw ? t("probeBytes", { n: r.raw }) : ""));
 
 async function scanPorts() {
   const log = [];
   const say = (s) => { log.push(s); showLog(log); };
-  say("MIDI 포트 진단… (모든 포트에 handshake 질의; 패밀리 포트부터)");
-  if (!webMidiSupported()) { say("  이 브라우저에는 Web MIDI 가 없다 (Chrome, https/localhost)"); fail("Web MIDI 없음"); return; }
+  say(t("scanTitle"));
+  if (!webMidiSupported()) { say(t("noWebMidiLog")); fail("noWebMidi"); return; }
   let backend;
   try { backend = await WebMidiBackend.request(); }
-  catch (e) { say("  " + ((e && e.message) || e)); fail("MIDI 권한이 거부되었다"); return; }
+  catch (e) { say("  " + ((e && e.message) || e)); fail("midiPermissionDenied"); return; }
   const { ins } = refreshPortSelect(backend);
-  if (!ins.length) { say("  MIDI 입력 포트가 없다 — 케이블/전원을 확인"); fail("MIDI 입력 포트가 없다"); return; }
+  if (!ins.length) { say(t("noInputLog")); fail("noInput"); return; }
   const outs = backend.outputNames();
-  say(`  입력 ${ins.length}개: ${ins.join("  |  ")}`);
-  say(`  출력 ${outs.length}개: ${outs.join("  |  ")}`);
+  say(t("inputPorts", { n: ins.length, list: ins.join("  |  ") }));
+  say(t("outputPorts", { n: outs.length, list: outs.join("  |  ") }));
   const up = new Updater(backend);
   const res = await up.probeAll((r) => say(probeLine(r)));
   const hit = res.find((r) => r.id);
   if (!hit) {
-    say("  어떤 포트도 handshake 에 응답하지 않는다.");
-    say("  확인: USB 데이터 케이블인가(충전 전용·BLE 아닌가), 다른 앱(에디터·DAW)이 포트를 잡고 있지 않은가, 기기 전원.");
-    fail("응답하는 MIDI 포트가 없다"); return;
+    say(t("noHandshake"));
+    say(t("cableCheck"));
+    fail("noResponding"); return;
   }
   midiPort = hit.name; $("midiport").value = hit.name;
-  say(`  → ${hit.name} 를 선택했다 (FLASH(USB) 가 이 포트로 쓴다).`);
-  ok(`MIDI 포트 진단 완료 · 응답: ${hit.name} (${hit.id.text})`);
+  say(t("selectedPortLog", { name: hit.name }));
+  ok("scanDone", { name: hit.name, id: hit.id.text });
 }
 
 /* FLASH(USB): put a package on the real device over Web MIDI SysEx. fm1_install.py is the
@@ -851,56 +2079,56 @@ async function scanPorts() {
  * `force` allows a package without our loader (the stock ROM, which carries the official one). */
 let flashing = false;
 async function flashUsb(raw, label, force) {
-  if (flashing || cartUsb) return fail("FLASH(USB) 가 이미 진행 중이다");
+  if (flashing || cartUsb) return fail("flashBusy");
   const log = [];
   const say = (s) => { log.push(s); showLog(log); };
-  say(`FLASH(USB) ${label} → USB-MIDI SysEx (tools/fm1_install.py 와 같은 프로토콜)`);
+  say(t("flashStartLog", { label }));
   let pack;
   try {
     pack = loadPackage(raw, force);
   } catch (e) {
     say("  " + ((e && e.message) || e));
-    fail("플래시할 수 없는 패키지다"); return;
+    fail("unflashable"); return;
   }
-  say(`  identity "${pack.product}" · 이미지 ${pack.image.length.toLocaleString()} B · CRC ok`);
+  say(t("flashImageLog", { product: pack.product, len: pack.image.length.toLocaleString() }));
   if (!webMidiSupported()) {
-    say("  Web MIDI 없음 — Chrome 을 https / localhost 로 열 것");
-    fail("이 브라우저에는 Web MIDI 가 없다"); return;
+    say(t("noWebMidiOpen"));
+    fail("noWebMidiStatus"); return;
   }
   flashing = true;
-  setProgress(null, "MIDI 연결 중…");
+  setProgress(null, "connectingMidi");
   try {
-    say("  MIDI 권한 요청 중… (주소창 알림을 허용)");
+    say(t("midiPermissionRequest"));
     const backend = await WebMidiBackend.request();
     refreshPortSelect(backend);   // keep the list current, so picking a port is never a mystery
     const up = new Updater(backend, { port: midiPort || null });
-    say("  기기를 찾는 중…" + (midiPort ? ` (선택한 포트 ${midiPort})` : ""));
-    let dev = await up.find(null, true, (n) => say(`    ${n} … 질의`));
+    say(t("findingDevice", { port: midiPort ? t("selectedPort", { port: midiPort }) : "" }));
+    let dev = await up.find(null, true, (n) => say(t("querying", { n })));
     if (!dev && midiPort) {           // a picked port that stays silent: try the rest of the family
-      say("  선택한 포트가 응답하지 않는다 — 나머지 패밀리 포트도 시도");
-      dev = await up.find(null, false, (n) => say(`    ${n} … 질의`), [midiPort]);
+      say(t("selectedSilent"));
+      dev = await up.find(null, false, (n) => say(t("querying", { n })), [midiPort]);
     }
     if (dev && dev.name !== midiPort) { midiPort = dev.name; $("midiport").value = dev.name; }
     if (!dev) {
       refreshPortSelect(backend);
       const ins = backend.inputNames(), outs = backend.outputNames();
-      say(midiPort ? `  선택한 포트 ${midiPort} 가 응답하지 않는다 — 모든 MIDI 포트 진단:` : "  자동으로 찾지 못했다 — 모든 MIDI 포트 진단:");
-      say(`  입력: ${ins.join("  |  ")}`);
-      say(`  출력: ${outs.join("  |  ")}`);
+      say(midiPort ? t("selectedNoAnswer", { port: midiPort }) : t("autoNotFound"));
+      say(t("inputList", { list: ins.join("  |  ") }));
+      say(t("outputList", { list: outs.join("  |  ") }));
       const res = await up.probeAll((r) => say(probeLine(r)));
       const hit = res.find((r) => r.id);
       if (hit) {
         midiPort = hit.name; $("midiport").value = hit.name;
-        say(`  → ${hit.name} 가 응답했다 — 선택했다. FLASH(USB) 를 다시 누르세요.`);
+        say(t("respondedSelect", { name: hit.name }));
       } else {
-        say("  어떤 포트도 응답하지 않는다. 확인: USB 데이터 케이블인가(충전 전용·BLE 아닌가),");
-        say("  다른 앱(에디터·DAW)이 포트를 잡고 있지 않은가, 기기 전원과 케이블.");
+        say(t("noPortAnswers"));
+        say(t("otherAppHolding"));
       }
       throw new InstallError("notfound",
-        hit ? `${hit.name} 가 응답한다 — 선택했으니 다시 시도하세요`
-            : (midiPort ? `선택한 포트 ${midiPort} 가 응답하지 않는다` : "기기를 찾지 못했다 — 목록에서 직접 고르세요"));
+        hit ? t("hitRetry", { name: hit.name })
+            : (midiPort ? t("selectedNotAnswer", { port: midiPort }) : t("noDevicePick")));
     }
-    say(`  기기 ${dev.id.text} · 포트 ${dev.name}` + (dev.id.loader ? " · 이미 업데이트 모드" : ""));
+    say(t("devicePort", { id: dev.id.text, name: dev.name }) + (dev.id.loader ? t("deviceLoaderMode") : ""));
     // The device asks for ~1250 reads during the write, so round/dedupe: one line per 50 reads
     // and per whole percent, not one per request.
     let last = "";
@@ -908,25 +2136,26 @@ async function flashUsb(raw, label, force) {
     const step = (k, a) => {
       if (k === "check") {
         const reads = Math.ceil(a / 50) * 50;
-        setProgress(null, `확인 중 · ${reads} reads`);
-        emit(`  패키지 확인 중… ${reads} reads`);
+        setProgress(null, "checkingReads", { reads });
+        emit(t("packageCheckingLog", { reads }));
       } else if (k === "write") {
-        setProgress(a, `쓰는 중 ${a}%`);
-        emit(`  쓰는 중 ${a}%`);
+        setProgress(a, "writing", { pct: a });
+        emit(t("writingLog", { pct: a }));
       } else {
-        const t = { start: `업데이트 시작 (${a})`, loader: "업데이트 로더로 전환",
-                    reboot: "재시작 대기", done: `완료: ${a}` }[k] || k;
-        setProgress(k === "done" ? 100 : null, t);
-        emit("  " + t);
+        const phaseKey = { start: "updateStart", loader: "updateLoader",
+                           reboot: "updateReboot", done: "updateDone" }[k];
+        const phaseText = phaseKey ? t(phaseKey, { phase: a }) : k;
+        setProgress(k === "done" ? 100 : null, phaseKey || k, { phase: a });
+        emit("  " + phaseText);
       }
     };
     const back = await up.install(dev, pack.image, pack.product, step);
-    say(`  ✓ 기기가 ${back} 을 실행한다`);
-    ok(`FLASH(USB) 완료 · ${back}`);
+    say(t("successExec", { back }));
+    ok("flashDone", { back });
   } catch (e) {
     say("  " + ((e && e.message) || e));
-    setProgress(0, "실패");
-    fail("FLASH(USB) 실패: " + ((e && e.message) || e));
+    setProgress(0, "failed");
+    fail("flashFailed", { msg: (e && e.message) || e });
   } finally {
     flashing = false;
   }
@@ -952,10 +2181,10 @@ function matchFirmware(pkg) {
  * valid copy, so the screen keeps updating even before the audio engine is up. */
 function runFirmware() {
   renderFirmware(); renderDevice();
-  if (!fw) { paintForeign(); ok("STOCK ROM 설치됨 · 시뮬레이터는 실행할 수 없다 (실기 전용)"); stats(); return; }
+  if (!fw) { paintForeign(); ok("stockInstalled"); stats(); return; }
   runner().load(fw);
-  const mode = wl ? "사운드" : (sound && AUDIO ? "오디오 대기 — 아무 곳이나 클릭" : "무음");
-  ok("실행 중 · " + FW[fw].label + " · " + mode + " · 설치된 패키지와 같은 소스에서 빌드된 wasm");
+  const modeKey = wl ? "modeSound" : (sound && AUDIO ? "modeWaiting" : "modeSilent");
+  ok("runningBuilt", { label: FW[fw].label, modeKey });
   if (sound && AUDIO && !wl && audioArmed) startSound();
 }
 
@@ -964,7 +2193,7 @@ function runFirmware() {
  * we stay on the silent runner and try again at the next gesture. */
 async function startSound() {
   if (wl || !fw) return;
-  ok("오디오 시작 중…");
+  ok("audioStarting");
   const r = makeWlRunner();
   wl = r;
   try {
@@ -973,7 +2202,7 @@ async function startSound() {
     if (wl === r) wl = null;
     r.dispose();
     audioArmed = false;                          // let the next gesture retry
-    fail("오디오를 시작할 수 없다: " + ((e && e.message) || e));
+    fail("audioStartError", { msg: (e && e.message) || e });
     stats();
     return;
   }
@@ -981,12 +2210,12 @@ async function startSound() {
   if (r.ac.state !== "running") {                // blocked by the autoplay policy: retry next gesture
     wl = null; r.dispose();
     audioArmed = false;
-    ok("실행 중 · " + FW[fw].label + " · 오디오 대기 — 아무 곳이나 클릭하세요");
+    ok("audioWaiting", { label: FW[fw].label });
     stats();
     return;
   }
   r.load(fw);
-  ok("실행 중 · " + FW[fw].label + " · 사운드 " + r.rate + " Hz");
+  ok("runningSound", { label: FW[fw].label, rate: r.rate });
   stats();
 }
 
@@ -1006,32 +2235,34 @@ async function loadFile(file) {
   try {
     userRaw = new Uint8Array(await file.arrayBuffer());
     userPkg = parseFwsc(userRaw);
-    renderPkg(userPkg, file.name || "사용자 패키지");
-    ok("원복/설치용 패키지 준비됨: " + userPkg.product + " — SIMULATOR 또는 FLASH(USB) 를 누르세요");
+    renderPkg(userPkg, file.name || t("userPackage"));
+    ok("packagePrepared", { product: userPkg.product });
   } catch (e) {
     userPkg = null; userRaw = null;
-    fail("패키지를 읽을 수 없다: " + e.message);
+    fail("packageUnreadable", { msg: e.message });
   }
 }
 
 // SIMULATOR: run the build on the web (modelled flash + its wasm). Nothing touches USB.
 $("simPicovave").addEventListener("click", () => {
-  if (!pkgs.picovave) return fail("picovave.fwsc 가 아직 없다 — tools/build_sim.py 를 실행할 것");
+  if (!pkgs.picovave) return fail("missingPicovave");
   simulate(pkgs.picovave.pkg, "picovave.fwsc", "picovave");
 });
 $("simRestore").addEventListener("click", () => {
-  if (!userPkg) return fail("원복/설치용 .fwsc 를 먼저 고르거나 끌어다 놓으세요");
-  simulate(userPkg, "복원", matchFirmware(userPkg));   // our build -> its wasm; else device-only
+  if (!userPkg) return fail("needRestore");
+  simulate(userPkg, t("restoreLabel"), matchFirmware(userPkg));   // our build -> its wasm; else device-only
 });
 // FLASH(USB): write the same package to a connected device over SysEx.
 $("flashPicovave").addEventListener("click", () => {
-  if (!pkgs.picovave || !pkgs.picovave.raw) return fail("picovave.fwsc 가 아직 없다 — tools/build_sim.py 를 실행할 것");
+  if (!pkgs.picovave || !pkgs.picovave.raw) return fail("missingPicovave");
   flashUsb(pkgs.picovave.raw, "picovave.fwsc", false);
 });
 $("flashRestore").addEventListener("click", () => {
-  if (!userRaw) return fail("원복/설치용 .fwsc 를 먼저 고르거나 끌어다 놓으세요");
-  flashUsb(userRaw, "복원", true);   // the stock ROM has the official loader, not ours: allow it
+  if (!userRaw) return fail("needRestore");
+  flashUsb(userRaw, t("restoreLabel"), true);   // the stock ROM has the official loader, not ours: allow it
 });
+$("langKo").addEventListener("click", () => setLang("ko"));
+$("langEn").addEventListener("click", () => setLang("en"));
 // Which MIDI port FLASH(USB) opens: auto, or one the user picked from the listed ports.
 $("midiport").addEventListener("change", (ev) => { midiPort = ev.target.value; });
 $("midiscan").addEventListener("click", () => { scanPorts(); });
@@ -1096,18 +2327,24 @@ function cartFrames(slot, name, d) {
   out.push(cartFrame(0x03, le7(crc16(d), 3)));
   return out;
 }
-const CART_ERR = ["", "BEGIN 아님", "CRC 불일치", "범위 밖", "너무 큼", "비어 있음", "슬롯", "카트 형식 아님"];
+const CART_ERR = ["", "cartErrBegin", "cartErrCrc", "cartErrRange", "cartErrBig",
+                  "cartErrEmpty", "cartErrSlot", "cartErrFormat"];
 function replyText(m) {
   const r = (m && m.reply) || [];
-  if (r.length < 7) return "응답 없음";
-  if (r[5] === 0x10) return "OK " + r[6];
-  if (r[5] === 0x11) return "ERR " + r[6] + " (" + (CART_ERR[r[6]] || "?") + ")";
-  return "INFO " + r[6];
+  if (r.length < 7) return t("replyNoResponse");
+  if (r[5] === 0x10) return t("replyOk", { n: r[6] });
+  if (r[5] === 0x11) return t("replyErr", { n: r[6], text: CART_ERR[r[6]] ? t(CART_ERR[r[6]]) : "?" });
+  return t("replyInfo", { n: r[6] });
 }
 
 let cartRaw = null, cartName = "";
 let cartWire = null;          // what goes on the wire: a PVB1 bytecode payload, or cartRaw
-let cartCompile = "";        // the note the cart line shows about the compile
+let cartBuild = null;         // { len, big } - the note the cart line shows about the compile
+function compileText() {
+  if (!cartBuild) return "";
+  return cartBuild.big ? t("bytecodeBig", { len: cartBuild.len, max: BC_MAX })
+                       : t("bytecode", { len: cartBuild.len });
+}
 // ONE cart at a time: the store holds a single slot (src/picovave_cart.h), so an upload replaces
 // the cart that is playing. A power cut mid-upload leaves the store empty and the embedded default
 // cart boots - the ladder's floor, not the cart it replaced.
@@ -1124,9 +2361,9 @@ const CART_SLOT = 0;
 const CART_TARGETS = { sim: "SIMULATOR", usb: "FLASH(USB)" };
 let cartTarget = "sim";
 function renderCartTarget() {
-  const t = CART_TARGETS[cartTarget];
-  $("cartSend").textContent = `${t} 카트(.p8.png) 업로드`;
-  $("cartErase").textContent = `${t} 슬롯 비우기`;
+  const target = CART_TARGETS[cartTarget];
+  $("cartSend").textContent = t("cartTargetUp", { target });
+  $("cartErase").textContent = t("cartTargetErase", { target });
 }
 
 /* Will this cart run on an SMK-37 Pro? The device gives the engine and Lua ONE pool - app.ld's
@@ -1218,23 +2455,20 @@ function cartTight(f) {
 function fitText() {
   if (!cartFit) return "";
   const kb = (n) => Math.round(n / 1024).toLocaleString();
-  const peak = `peak ${kb(cartFit.peak)} KB / 기기 풀 ${kb(DEVICE_HEAP)} KB`;
+  const peak = t("fitPeak", { peak: kb(cartFit.peak), pool: kb(DEVICE_HEAP) });
   const early = cartFit.frames < MEASURE_FRAMES;
-  const howlong = early ? `첫 ${cartFit.frames}프레임` : `${MEASURE_FRAMES}프레임`;
+  const howlong = early ? t("fitFirstFrames", { n: cartFit.frames }) : t("fitFrames", { n: MEASURE_FRAMES });
   if (cartFit.status !== 0)
-    return ` · ✗ 기기 불가: 카트가 기기 아레나에서 실행되지 않았다 (status ${cartFit.status} · ${peak})`;
+    return t("fitNoRun", { status: cartFit.status, peak });
   if (cartFit.refused > HITCH_FRAMES)
-    return ` · ⚠ 기기 불가(끊김): ${howlong} 측정에서 기기 allocator가 ` +
-           `${cartFit.refused}회 거부했다 — GC 가 계속 끼어든다 (${peak})`;
+    return t("fitThrash", { howlong, refused: cartFit.refused, peak });
   if (cartFit.refused > 0)
-    return ` · ⚠ 기기 빠듯: ${howlong} 측정에서 ${cartFit.refused}회 거부 ` +
-           `(가끔 끊길 수 있다 · ${peak})`;
+    return t("fitTight", { howlong, refused: cartFit.refused, peak });
   if (!cartFit.deviceAlloc && cartFit.peak > DEVICE_HEAP)
-    return ` · ⚠ 기기 불가(비용 모델): 보수적 비용 모델의 ${peak} — 이 빌드는 arena 없는 cost ` +
-           `model 이라 거부를 세지 못한다. 실기에서 돌 수도 있다`;
+    return t("fitCost", { peak });
   if (early)
-    return ` · ⚠ 기기 판정 보류: 측정이 ${cartFit.frames}프레임에서 멈췄다 (거부 0회 · ${peak})`;
-  return ` · ✓ 기기 OK: ${MEASURE_FRAMES}프레임 측정에서 거부 0회 (${peak})`;
+    return t("fitEarly", { frames: cartFit.frames, peak });
+  return t("fitOk", { frames: MEASURE_FRAMES, peak });
 }
 
 async function loadCart(file) {
@@ -1245,41 +2479,38 @@ async function loadCart(file) {
   } catch (e) {
     cartRaw = null;
     cartFit = null;
-    $("cartsay").textContent = "-";
-    return fail(`${name} (${file.size} B) 은 카트가 아니다: ${(e && e.message) || e} — PICO-8 의 .p8.png 를 쓸 것`);
+    setCartSay("dash");
+    return fail("cartNot", { name, size: file.size, msg: (e && e.message) || e });
   }
   cartName = name;
   cartFit = null;
   cartWire = null;
-  cartCompile = "";
+  cartBuild = null;
   try {
     const bc = await compileCart(cartRaw.subarray(4));
     if (bc) {
-      if (bc.length <= BC_MAX) { cartWire = bytecodePayload(cartRaw, bc); cartCompile = ` · 바이트코드 ${bc.length} B`; }
-      else cartCompile = ` · 바이트코드 ${bc.length} B > 슬롯 ${BC_MAX} B → 소스로 업로드`;
+      if (bc.length <= BC_MAX) { cartWire = bytecodePayload(cartRaw, bc); cartBuild = { len: bc.length, big: false }; }
+      else cartBuild = { len: bc.length, big: true };
     }
-  } catch (e) { cartCompile = ""; }
-  $("cartsay").textContent = `${cartName} · 160x205 해독 · ${cartRaw.length} B (쿠킹 32,800)${cartCompile} · 기기 적합성 측정 중…`;
+  } catch (e) { cartBuild = null; }
+  setCartSay("cartInspecting", { name: cartName, len: cartRaw.length, compile: compileText() });
   cartFit = await measureCart(cartWire || cartRaw);   // measure what will actually be uploaded
-  $("cartsay").textContent = `${cartName} · 160x205 해독 · ${cartRaw.length} B (쿠킹 32,800)${cartCompile}${fitText()}`;
+  setCartSay("cartInfo", { name: cartName, len: cartRaw.length, compile: compileText(), fit: fitText() });
   if (cartFit && cartFit.refused > 0)
     // A cart the pool served only by refusing still runs, but a refusal IS a hitch (Lua collects and
     // retries): amber, and the line says how often. cartTight() is the harder gate the upload asks.
-    warn(`${cartName} 준비됨 — ${fitText().slice(3)} · ` +
-         `대상 ${CART_TARGETS[cartTarget]} · 카트 업로드를 누르세요`);
+    warn("cartReadyWarn", { name: cartName, fit: fitText().slice(3), target: CART_TARGETS[cartTarget] });
   else if (cartTight(cartFit))
-    warn(`${cartName} 준비됨 — 그러나 기기(SMK-37 Pro) 판정이 좋지 않다: ` +
-         `${fitText().slice(3)} · 대상 ${CART_TARGETS[cartTarget]} 을 확인하고 올릴 것`);
+    warn("cartReadyTight", { name: cartName, fit: fitText().slice(3), target: CART_TARGETS[cartTarget] });
   else
-    ok(`${cartName} 준비됨 — 쿠킹 카트 ${cartRaw.length} B (마법 + ROM 17,152 + 코드 15,648)${fitText()} · ` +
-       `대상 ${CART_TARGETS[cartTarget]} · 카트 업로드를 누르세요`);
+    ok("cartReadyOk", { name: cartName, len: cartRaw.length, fit: fitText().slice(3), target: CART_TARGETS[cartTarget] });
 }
 
 /* The chosen .p8.png, already unwrapped into exactly what the device takes: PV_CART_LEN bytes of
  * magic + cooked cart (the same bytes pv_hdr_read checks for). A text .p8 is not a cart here -
  * nothing but a 160x205 image becomes a payload - so there is only one format to get wrong. */
 function cartToSend() {
-  if (!cartRaw) { fail("카트 .p8.png 를 먼저 고르거나 끌어다 놓으세요"); return null; }
+  if (!cartRaw) { fail("needCart"); return null; }
   return cartWire || cartRaw;
 }
 
@@ -1300,23 +2531,22 @@ const BC_MAX = 105656;                             // 122,816 payload - 17,160 h
  * re-loads the slot; there is no chip reset). */
 function uploadCartSim(d) {
   const r = runner();
-  if (r.kind === "wl" && !wl.node) return fail("실행 중인 기기가 없다");
+  if (r.kind === "wl" && !wl.node) return fail("noRunningDevice");
   const slot = CART_SLOT;
   const msgs = cartFrames(slot, cartName, d);
-  const log = [`SIMULATOR 카트 · ${cartName} · ${d.length} B · 슬롯 ${slot} · ` +
-               `${msgs.length} 프레임 (BEGIN + DATA×${msgs.length - 2} + END)`];
+  const log = [t("simCartLog", { name: cartName, len: d.length, slot, frames: msgs.length, data: msgs.length - 2 })];
   let last = null;
-  setProgress(0, `프레임 0/${msgs.length}`);
+  setProgress(0, "frameCounter", { i: 0, n: msgs.length });
   for (const m of msgs) { const res = r.sysex(m); if (res) last = res; }
-  setProgress(100, `프레임 ${msgs.length}/${msgs.length}`);
+  setProgress(100, "frameCounter", { i: msgs.length, n: msgs.length });
   if (last) {
-    log.push(`  → ${replyText(last)} · 활성 슬롯 ${last.active}`);
-    log.push("  장치의 SysEx 프로토콜(src/picovave_cart.h)이 파싱 · 커밋되면 그 카트로 재부팅한다");
+    log.push(t("simCartActive", { reply: replyText(last), slot: last.active }));
+    log.push(t("simCartProtocol"));
     showLog(log);
-    $("cartsay").textContent = `${cartName} · 슬롯 ${last.active} 실행 중 (웹)${fitText()}`;
-    ok(`SIMULATOR 카트 업로드 완료 · ${cartName} · 슬롯 ${last.active} (${replyText(last)})`);
+    setCartSay("simCartSay", { name: cartName, slot: last.active, fit: fitText() });
+    ok("simCartDone", { name: cartName, slot: last.active, reply: replyText(last) });
   } else {
-    log.push("  → 워클릿(오디오 실행기)으로 프레임을 보냈다 — 응답은 아래 로그에 이어진다");
+    log.push(t("simWorkletSent"));
     showLog(log);
   }
 }
@@ -1339,34 +2569,34 @@ async function cartReply(link, ms) {
 /* Find the device FLASH(USB) cart commands go to: the port the user picked, else the first family
  * port that answers the handshake - the same search the package flasher runs. */
 async function cartUsbLink(say) {
-  say("  MIDI 권한 요청 중… (주소창 알림을 허용)");
+  say(t("midiPermRequestShort"));
   const backend = await WebMidiBackend.request();
   refreshPortSelect(backend);
   const up = new Updater(backend, { port: midiPort || null });
-  say("  기기를 찾는 중…" + (midiPort ? ` (선택한 포트 ${midiPort})` : ""));
-  let dev = await up.find(null, true, (n) => say(`    ${n} … 질의`));
-  if (!dev && midiPort) dev = await up.find(null, false, (n) => say(`    ${n} … 질의`), [midiPort]);
+  say(t("findingDevice", { port: midiPort ? t("selectedPort", { port: midiPort }) : "" }));
+  let dev = await up.find(null, true, (n) => say(t("querying", { n })));
+  if (!dev && midiPort) dev = await up.find(null, false, (n) => say(t("querying", { n })), [midiPort]);
   if (!dev) {
-    say("  응답하는 기기가 없다 — 케이블·전원을 확인하거나 MIDI 포트 진단을 쓸 것");
-    throw new InstallError("notfound", "기기를 찾지 못했다");
+    say(t("noAnswerDevice"));
+    throw new InstallError("notfound", t("deviceNotFound"));
   }
   if (dev.name !== midiPort) { midiPort = dev.name; $("midiport").value = dev.name; }
-  say(`  기기 ${dev.id.text} · 포트 ${dev.name}`);
+  say(t("probeDevicePort", { id: dev.id.text, name: dev.name }));
   return { up, dev };
 }
 
 /* Send frames one at a time and read each answer; throw on the first ERR or silence. */
 async function cartUsbSend(dev, msgs, say) {
   let last = null;
-  setProgress(0, `프레임 0/${msgs.length}`);
+  setProgress(0, "frameCounter", { i: 0, n: msgs.length });
   for (let i = 0; i < msgs.length; i++) {
-    setProgress(((i + 1) / msgs.length) * 100, `프레임 ${i + 1}/${msgs.length}`);
-    if (!dev.link.send(msgs[i])) throw new InstallError("lost", "기기가 끊겼다");
+    setProgress(((i + 1) / msgs.length) * 100, "frameCounter", { i: i + 1, n: msgs.length });
+    if (!dev.link.send(msgs[i])) throw new InstallError("lost", t("deviceDisconnected"));
     last = await cartReply(dev.link, 800);            // the device answers every frame
-    if (!last) throw new InstallError("silent", `프레임 ${i + 1}/${msgs.length} 에 응답이 없다`);
-    const t = replyText({ reply: last });
-    if (last[5] === 0x11) throw new InstallError("cart", t);
-    if (i === 0 || i === msgs.length - 1) say(`  ${i === 0 ? "BEGIN" : "END"} → ${t}`);
+    if (!last) throw new InstallError("silent", t("frameReplyMissing", { i: i + 1, n: msgs.length }));
+    const reply = replyText({ reply: last });
+    if (last[5] === 0x11) throw new InstallError("cart", reply);
+    if (i === 0 || i === msgs.length - 1) say(`  ${i === 0 ? "BEGIN" : "END"} → ${reply}`);
   }
   return last;
 }
@@ -1375,35 +2605,32 @@ async function cartUsbSend(dev, msgs, say) {
  * SIMULATOR path on the wire - same frames, same slots - just to the hardware. */
 let cartUsb = false;
 async function uploadCartUsb(d) {
-  if (cartUsb) return fail("FLASH(USB) 가 이미 진행 중이다");
-  if (!webMidiSupported()) { fail("이 브라우저에는 Web MIDI 가 없다 — Chrome 을 https / localhost 로 열 것"); return; }
+  if (cartUsb) return fail("flashBusy");
+  if (!webMidiSupported()) { fail("cartWebMidiMissing"); return; }
   /* The device survives a cart it cannot run - the boot ladder falls back to a cart that does
    * (docs/HANDOVER.md §7) - but uploading one is still pointless, and it is exactly the case that
    * used to leave the panel on the boot screen. Say so and ask, rather than send it silently.
    * The gate is the measurement on the device's own allocator/arena (cartTight): status, and the
    * refusals it really made. */
   if (cartTight(cartFit) &&
-      !confirm(`${cartName} 은 기기(SMK-37 Pro)에서 빠듯하거나 실행되지 않는다:\n\n` +
-               `${fitText().slice(3)}\n\n` +
-               `그래도 실기에 올릴까? 기기는 기본/이전 카트로 폴백하므로 멈추지는 않는다.`))
-    { fail("FLASH(USB) 카트 업로드 취소 — 기기가 감당하지 못한 카트"); return; }
+      !confirm(t("cartConfirm", { name: cartName, fit: fitText().slice(3) })))
+    { fail("cartCancelled"); return; }
   const slot = CART_SLOT;
   const msgs = cartFrames(slot, cartName, d);
-  const log = [`FLASH(USB) 카트 · ${cartName} · ${d.length} B · 슬롯 ${slot} · ` +
-               `${msgs.length} 프레임 (BEGIN + DATA×${msgs.length - 2} + END)`];
+  const log = [t("usbCartLog", { name: cartName, len: d.length, slot, frames: msgs.length, data: msgs.length - 2 })];
   const say = (s) => { log.push(s); showLog(log); };
   cartUsb = true;
   try {
     const { dev } = await cartUsbLink(say);
-    say(`  ${msgs.length} 프레임을 보낸다 (펌웨어의 BEGIN/DATA/END)…`);
+    say(t("sendingFrames", { n: msgs.length }));
     const last = await cartUsbSend(dev, msgs, say);
     dev.link.close();
-    say("  커밋되면 기기는 그 카트로 다시 부팅한다 (칩 리셋이 아니라 실행만 다시 시작)");
-    $("cartsay").textContent = `${cartName} · 슬롯 ${slot} 실행 중 (실기)${fitText()}`;
-    ok(`FLASH(USB) 카트 업로드 완료 · ${cartName} · 슬롯 ${slot} (${replyText({ reply: last })})`);
+    say(t("commitReboot"));
+    setCartSay("usbCartSay", { name: cartName, slot, fit: fitText() });
+    ok("usbCartDone", { name: cartName, slot, reply: replyText({ reply: last }) });
   } catch (e) {
     say("  " + ((e && e.message) || e));
-    fail("FLASH(USB) 카트 실패: " + ((e && e.message) || e));
+    fail("usbCartFailed", { msg: (e && e.message) || e });
   } finally {
     cartUsb = false;
   }
@@ -1419,20 +2646,20 @@ function uploadCart() {
 /* Erase the one slot (back to the embedded default cart). FLASH(USB) sends the device's own ERASE
  * frame, so the same command clears the SLOOP store there. */
 async function eraseCartUsb() {
-  if (cartUsb) return fail("FLASH(USB) 가 이미 진행 중이다");
-  if (!webMidiSupported()) { fail("이 브라우저에는 Web MIDI 가 없다 — Chrome 을 https / localhost 로 열 것"); return; }
-  const log = ["FLASH(USB) 슬롯 비우기 · ERASE 0"];
+  if (cartUsb) return fail("flashBusy");
+  if (!webMidiSupported()) { fail("cartWebMidiMissing"); return; }
+  const log = [t("eraseUsbLog")];
   const say = (s) => { log.push(s); showLog(log); };
   cartUsb = true;
   try {
     const { dev } = await cartUsbLink(say);
     const last = await cartUsbSend(dev, [cartFrame(0x05, [0])], say);
     dev.link.close();
-    $("cartsay").textContent = "슬롯 비움 → 기본 카트 (실기)";
-    ok(`FLASH(USB) 슬롯 비우기 → 기본 카트 (${replyText({ reply: last })})`);
+    setCartSay("erasedUsb");
+    ok("eraseUsbDone", { reply: replyText({ reply: last }) });
   } catch (e) {
     say("  " + ((e && e.message) || e));
-    fail("FLASH(USB) 슬롯 비우기 실패: " + ((e && e.message) || e));
+    fail("eraseUsbFailed", { msg: (e && e.message) || e });
   } finally {
     cartUsb = false;
   }
@@ -1441,16 +2668,17 @@ async function eraseCartUsb() {
 function eraseCart() {
   if (cartTarget === "usb") return eraseCartUsb();
   const res = runner().sysex(cartFrame(0x05, [0]));   // the one slot: back to the embedded cart
-  $("cartsay").textContent = "슬롯 비움 → 기본 카트 (웹)";
-  setProgress(100, "슬롯 비움");
-  ok("SIMULATOR 슬롯 비우기 → 기본 카트 (" + replyText(res) + ")");
+  setCartSay("erasedWeb");
+  setProgress(100, "eraseSlotDone");
+  ok("eraseWebDone", { reply: replyText(res) });
 }
 
 // The worklet's reply for one upload frame (the silent runner returns its reply synchronously).
 function onCartReply(m) {
   if (!m.reboot) return;
-  $("cartsay").textContent = `슬롯 ${m.active < 0 ? "기본" : m.active} 실행 중 · ${replyText(m)}`;
-  ok(`카트 실행 중 · 슬롯 ${m.active < 0 ? "기본" : m.active} (${replyText(m)}) · 사운드`);
+  const slot = m.active < 0 ? t("defaultCart") : m.active;
+  setCartSay("onCartReply", { slot, reply: replyText(m) });
+  ok("onCartOk", { slot, reply: replyText(m) });
 }
 
 $("cartp8").addEventListener("change", (ev) => loadCart(ev.target.files && ev.target.files[0]));
@@ -1459,8 +2687,10 @@ $("cartp8").addEventListener("change", (ev) => loadCart(ev.target.files && ev.ta
 $("cartmode").addEventListener("change", (ev) => {
   cartTarget = ev.target.value === "usb" ? "usb" : "sim";
   renderCartTarget();
-  ok(`카트 대상: ${CART_TARGETS[cartTarget]} ` +
-     (cartTarget === "usb" ? "(연결된 실기 · Web MIDI 필요)" : "(웹 wasm 저장소)"));
+  ok("cartTargetSet", {
+    target: CART_TARGETS[cartTarget],
+    note: t(cartTarget === "usb" ? "cartTargetUsbNote" : "cartTargetSimNote"),
+  });
 });
 $("cartSend").addEventListener("click", uploadCart);
 $("cartErase").addEventListener("click", eraseCart);
@@ -1556,18 +2786,43 @@ async function boot() {
 
   // The package list the device box can flash (ours only; the stock ROM is the user's file).
   const have = Object.keys(FW).filter((k) => pkgs[k]).map((k) =>
-    `${FW[k].label}: ${pkgs[k].pkg.product} · flash.bin ${pkgs[k].flash ? pkgs[k].flash.length.toLocaleString() + " B" : "없음"}`);
-  $("pkg").textContent = (have.length ? have.join("\n") : "서빙된 패키지 없음 — tools/build_sim.py 실행") + "\n(설치/복원하면 아래 로그에 전체 검증이 나온다)";
+    `${FW[k].label}: ${pkgs[k].pkg.product} · flash.bin ` +
+    (pkgs[k].flash ? pkgs[k].flash.length.toLocaleString() + " B" : t("notAvailable")));
+  pkgShown = null;
+  pkgHave = have;
+  renderPkgView();
 
   const missing = Object.keys(FW).filter((k) => !exs[k]).map((k) => FW[k].label);
-  if (!fw) { fail("wasm 을 불러올 수 없다 — tools/build_sim.py 를 실행할 것"); stats(); return false; }
+  if (!fw) { fail("bootMissing"); stats(); return false; }
   if (pkgs[fw]) device.end = pkgs[fw].flash ? pkgs[fw].flash.length : null;
   $("sound").classList.toggle("on", sound);   // audio is on by default; the first gesture starts it
   runFirmware();
-  if (missing.length) ok(status.textContent + " · 없음: " + missing.join(", "));
+  if (missing.length) ok("missingBuilds", { status: status.textContent, missing: missing.join(", ") });
   return true;
 }
 
+// The masthead links follow the section in view. A browser without IntersectionObserver simply
+// keeps every link in its resting state.
+if (typeof IntersectionObserver === "function" && typeof document.querySelectorAll === "function") {
+  try {
+    const links = Array.from(document.querySelectorAll(".sitenav a[href^='#']"));
+    const shown = new Set();
+    const order = ["instrument", "device-panel", "manual"];
+    const mark = (id) => links.forEach((a) => {
+      if (a.getAttribute("href") === "#" + id) a.setAttribute("aria-current", "true");
+      else a.removeAttribute("aria-current");
+    });
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach((e) => { if (e.isIntersecting) shown.add(e.target.id); else shown.delete(e.target.id); });
+      const id = order.find((x) => shown.has(x));
+      if (id) mark(id);
+    }, { rootMargin: "-20% 0px -70% 0px" });
+    order.forEach((id) => { const el = document.getElementById(id); if (el) io.observe(el); });
+  } catch (e) { /* no observer: the links are still links */ }
+}
+
+// Apply the remembered language before the first paint, then let boot() replace the loading state.
+setLang(lang, false);
 boot();
 </script>
 </body>

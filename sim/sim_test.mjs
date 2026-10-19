@@ -424,12 +424,13 @@ if (fixtures.length) {
   }
 
   // -------------------------------------------------------------------------------------------
-  // ⬜ and 🌵 end to end, in a fresh instance so nothing above is disturbed. The panel inputs
-  // pv_gamepad() reads for them (pad 12 = ⬜, pad 13 = 🌵) have to cross the seam and reach the
-  // engine: 🌵 as PICO-8's own btn(6), ⬜ as the engine's abort, which this harness's setjmp
-  // answers by re-beginning the cart. The cart below shows its own age - PICO-8 dark blue for its
-  // first 40 frames, green after that, bright green while btn(6) is held - so a restart is the
-  // panel going back to the first colour, and Start is the third one.
+  // Pause, and the engine's own abort, end to end in a fresh instance so nothing above is
+  // disturbed. Pause is pad 13 (PICO-8's own btn(6)); the abort is pad 12, which pv_gamepad()
+  // still maps to ESCAPE even though the page no longer prints it as a control. Both have to
+  // cross the seam and reach the engine: Pause as btn(6), the abort as the engine's setjmp
+  // re-begin. The cart below shows its own age - PICO-8 dark blue for its first 40 frames, green
+  // after that, bright green while btn(6) is held - so the abort is the panel going back to the
+  // first colour, and Pause is the third one.
   const ctl = (await WebAssembly.instantiate(probeMod, imports)).exports;
   if (ctl._initialize) ctl._initialize();
   const cfeed = (m) => {
@@ -457,26 +458,26 @@ if (fixtures.length) {
   const young = cfb[PX];                              // cls(1): the cart's first colour
   for (let i = 0; i < 60; i++) ctl.sim_frame();
   const aged = cfb[PX];                               // cls(3): it has been running past frame 40
-  check("the Start/menu test cart runs and repaints as it ages",
+  check("the Pause/abort test cart runs and repaints as it ages",
         young !== 0 && aged !== young && ctl.sim_status() === 0,
         "young=" + young + " aged=" + aged + " status=" + ctl.sim_status());
-  ctl.sim_pad(13, 127);                               // 🌵
+  ctl.sim_pad(13, 127);                               // Pause
   for (let i = 0; i < 2; i++) ctl.sim_frame();
   const startPx = cfb[PX];                            // cls(11) only if the cart read btn(6)
   ctl.sim_pad(13, 0);
-  check("🌵 (pad 13) reaches a cart as PICO-8's btn(6)",
+  check("Pause (pad 13) reaches a cart as PICO-8's btn(6)",
         startPx !== aged && startPx !== young && startPx !== 0,
-        "aged=" + aged + " with 🌵 held=" + startPx);
+        "aged=" + aged + " with Pause held=" + startPx);
   for (let i = 0; i < 4; i++) ctl.sim_frame();       // and back to its age colour when let go
   const agedAgain = cfb[PX];
-  ctl.sim_pad(12, 127);                               // ⬜
+  ctl.sim_pad(12, 127);                               // the engine's abort input
   for (let i = 0; i < 3; i++) ctl.sim_frame();
   ctl.sim_pad(12, 0);
   for (let i = 0; i < 2; i++) ctl.sim_frame();
   const restarted = cfb[PX];
-  check("⬜ (pad 12) reaches the engine and restarts the running cart",
+  check("the engine's abort input (pad 12) re-begins the running cart",
         agedAgain === aged && restarted === young,
-        "aged=" + aged + " after ⬜=" + restarted + " (first colour=" + young + ")");
+        "aged=" + aged + " after abort=" + restarted + " (first colour=" + young + ")");
 }
 
 // ---------------------------------------------------------------------------------------------

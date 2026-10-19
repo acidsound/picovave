@@ -27,8 +27,8 @@ uint32_t gamepad;                        /* p8_input.c reads this when !SDL; set
  * of .bss, and every byte .bss does not use is Lua heap (app.ld: .pool sits right behind .bss,
  * alloc.c reads the linker's _pool_start). This used to be the 240x240 panel framebuffer,
  * 115,200 B - 82,432 B of Lua the 45 KB carts never got. The 128->240 scale is now
- * gdi_expand_row(), applied by src/picovave.c one 240-pixel row at a time on its way to
- * lcd_blit(), so a whole panel frame never exists in RAM. */
+ * gdi_expand_row(), applied by src/picovave.c one 240-pixel row at a time into a single panel
+ * address window, so a whole panel frame never exists in RAM. */
 uint16_t p8_screen_fb[GDI_W * GDI_H];
 uint32_t p8_panel_draws;
 uint32_t p8_panel_bytes;

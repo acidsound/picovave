@@ -29,7 +29,7 @@
 #include "p8_lua.h"
 #include "p8_lua_helper.h"
 #include "p8_overlay_helper.h"
-#include "p8_print_helper.h"   /* picovave: p8_render() draws the fps readout with draw_text() */
+#include "p8_print_helper.h"
 #include "p8_parser.h"
 #include "pico8.h"             /* picovave: pico8_code_section_decompress() (p8_load_cooked) */
 #include "p8_pause_menu.h"
@@ -97,8 +97,12 @@ static int p8_materialize_script(void);
 static void p8_release_script(void);
 
 unsigned m_fps = 30;
-unsigned m_actual_fps = 0;
 unsigned m_frames = 0;
+
+/* picovave: the overlay is the engine's I/O icon (p8_show_io_icon) and nothing else. Most carts
+ * never touch cartdata, so the composite pass is skipped instead of walking 128x128 transparent
+ * pixels every frame. Cleared by p8_show_io_icon(false). */
+static bool overlay_visible;
 
 p8_clock_t m_start_time;
 
@@ -544,6 +548,8 @@ int p8_begin(void)
     assert(m_initialized);
 
     cart_running = false;          /* a reset() longjmp leaves it set */
+    overlay_clear();               /* a fresh cart starts without the previous one's I/O icon */
+    overlay_visible = false;
     p8_reset_cart();
 
     cart_running = true;
@@ -738,9 +744,6 @@ static uint8_t high_color_resolve(uint8_t hc_mode, uint8_t pix_index, int sx, in
 #ifdef SDL
 void p8_render()
 {
-    sprintf(m_str_buffer, "%d", (int)m_actual_fps);
-    draw_simple_text(m_str_buffer, 0, 0, 1);
-
     uint32_t *output = m_output->pixels;
     uint8_t transform = m_memory[MEMORY_SCREEN_TRANSFORM];
     uint8_t hc_mode = m_memory[MEMORY_HIGH_COLOUR_MODE];
@@ -807,20 +810,30 @@ void p8_render()
     if (xSemaphoreTake(m_drawSemaphore, portMAX_DELAY) != pdTRUE)
         return;
 
-    sprintf(m_str_buffer, "%d", (int)m_actual_fps);
-    draw_text(m_str_buffer, strlen(m_str_buffer), 0, 0, 1, 0, false, NULL, NULL, NULL);
-
     /* picovave: PICO-8's screen, 1:1 into the seam's GDI_W x GDI_H surface (femto8/seam/gdi.h).
      * The 128->240 scale is the SEAM's now, which is what lets the board blit one row at a time
      * and never hold a panel frame in RAM: the 240-wide scaler that used to live here needed a
      * 240x240 buffer, 82,432 B of .bss that the Lua heap gets instead (docs/HANDOVER.md 12).
      * The pixel rule is the SDL path's - screen transform (0x5f2c) and high-colour mode, both
      * identity for a cart that does not touch them - so this file's three consumers (the board,
-     * the wasm simulator, the host preview) agree on what a cart draws. */
+     * the wasm simulator, the host preview) agree on what a cart draws.
+     *
+     * The 16-entry palette tables are built once per frame. A screen byte is two 4-bit palette
+     * indices; the common path is then one table lookup per pixel instead of color_get() +
+     * color_index() + m_colors[] for every one of the 16,384 pixels. high-colour mode has its
+     * own palette selection per line/pixel, so it keeps the resolver. */
     uint16_t *output = gdi_get_frame_buffer_addr(HW_LCDC_LAYER_0);
     uint8_t transform = m_memory[MEMORY_SCREEN_TRANSFORM];
     uint8_t hc_mode = m_memory[MEMORY_HIGH_COLOUR_MODE];
     uint32_t screen_base = (uint32_t)m_memory[MEMORY_SCREEN_PHYS] << 8;
+    uint16_t screen_lut[16];
+    uint16_t overlay_lut[16];
+
+    for (int i = 0; i < 16; i++)
+    {
+        screen_lut[i] = m_colors[color_index(color_get(PALTYPE_SCREEN, i))];
+        overlay_lut[i] = m_colors[color_index((uint8_t)i)];
+    }
 
     for (int y = 0; y < P8_HEIGHT; y++)
     {
@@ -837,13 +850,11 @@ void p8_render()
                 uint8_t value = *s++;
                 uint8_t left = value & 0xF;
                 uint8_t right = value >> 4;
-                uint8_t index_left = hc_mode ? high_color_resolve(hc_mode, left, x, y)
-                                             : color_get(PALTYPE_SCREEN, left);
-                uint8_t index_right = hc_mode ? high_color_resolve(hc_mode, right, x + 1, y)
-                                              : color_get(PALTYPE_SCREEN, right);
 
-                row[x] = m_colors[color_index(index_left)];
-                row[x + 1] = m_colors[color_index(index_right)];
+                row[x] = hc_mode ? m_colors[color_index(high_color_resolve(hc_mode, left, x, y))]
+                                 : screen_lut[left];
+                row[x + 1] = hc_mode ? m_colors[color_index(high_color_resolve(hc_mode, right, x + 1, y))]
+                                     : screen_lut[right];
             }
         }
         else
@@ -851,36 +862,41 @@ void p8_render()
             for (int x = 0; x < P8_WIDTH; x++)
             {
                 int sx, sy;
-                uint8_t value, pix, index;
+                uint8_t value, pix;
 
                 screen_transform_pixel(transform, x, y, &sx, &sy);
                 value = m_memory[screen_base + (uint32_t)(sx >> 1) + ((uint32_t)sy * 64u)];
                 pix = IS_EVEN(sx) ? (value & 0xF) : (value >> 4);
-                index = hc_mode ? high_color_resolve(hc_mode, pix, sx, sy)
-                                : color_get(PALTYPE_SCREEN, pix);
-
-                row[x] = m_colors[color_index(index)];
+                if (hc_mode)
+                    row[x] = m_colors[color_index(high_color_resolve(hc_mode, pix, sx, sy))];
+                else
+                    row[x] = screen_lut[pix];
             }
         }
     }
 
     /* The overlay layer over it, on the same 128x128 grid: the engine draws its I/O icon here
-     * (p8_show_io_icon) while a cart touches cartdata, and wipes it again after. */
-    for (int y = 0; y < P8_HEIGHT; y++)
+     * (p8_show_io_icon) while a cart touches cartdata, and wipes it again after. Nothing else
+     * writes the overlay, so a cart that never touches cartdata skips the whole 16,384-pixel
+     * composite pass (overlay_visible, set in p8_show_io_icon). */
+    if (overlay_visible)
     {
-        uint16_t *row = output + (y * P8_WIDTH);
-        const uint8_t *overlay_mem = m_overlay_memory + ((uint32_t)y * 64u);
-
-        for (int x = 0; x < P8_WIDTH; x += 2)
+        for (int y = 0; y < P8_HEIGHT; y++)
         {
-            uint8_t value = overlay_mem[x >> 1];
-            uint8_t left = value & 0xF;
-            uint8_t right = value >> 4;
+            uint16_t *row = output + (y * P8_WIDTH);
+            const uint8_t *overlay_mem = m_overlay_memory + ((uint32_t)y * 64u);
 
-            if (left != OVERLAY_TRANSPARENT_COLOR)
-                row[x] = m_colors[color_index(left)];
-            if (right != OVERLAY_TRANSPARENT_COLOR)
-                row[x + 1] = m_colors[color_index(right)];
+            for (int x = 0; x < P8_WIDTH; x += 2)
+            {
+                uint8_t value = overlay_mem[x >> 1];
+                uint8_t left = value & 0xF;
+                uint8_t right = value >> 4;
+
+                if (left != OVERLAY_TRANSPARENT_COLOR)
+                    row[x] = overlay_lut[left];
+                if (right != OVERLAY_TRANSPARENT_COLOR)
+                    row[x + 1] = overlay_lut[right];
+            }
         }
     }
 
@@ -905,7 +921,6 @@ void p8_flip()
     int sleep_time = target_frame_time - elapsed_time;
     if (sleep_time < 0)
         sleep_time = 0;
-    m_actual_fps = 1000 / (elapsed_time + sleep_time);
 
     if (sleep_time > 0)
         p8_sleep(sleep_time);
@@ -1219,9 +1234,11 @@ void p8_show_io_icon(bool show)
 {
     if (show) {
         overlay_draw_icon(io_icon, P8_WIDTH - 8, 0);
+        overlay_visible = true;
     } else {
         overlay_draw_rectfill(P8_WIDTH - 8, 0, P8_WIDTH-1, 7, OVERLAY_TRANSPARENT_COLOR);
         p8_dialog_draw_stack();
+        overlay_visible = false;
     }
     p8_flip();
 }

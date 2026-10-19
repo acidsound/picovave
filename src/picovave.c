@@ -79,9 +79,10 @@ extern uint32_t p8_panel_draws, p8_panel_bytes;    /* ...and this file */
 static uint8_t panel_up;                 /* lcd_init() ran: the panel, and so a crash screen, is safe */
 
 /* One panel frame, 240 rows at a time: expand a row of the engine's screen (or of a screen
- * picovave drew into it) and hand it to the ST7789 big endian. The row is the only frame-sized
- * buffer in the app: 480 B, against the 115,200 B of .bss a 240x240 canvas used to cost - and
- * .bss is Lua heap here (app.ld puts .pool right behind it). */
+ * picovave drew into it), byte-swap it for the ST7789 and stream it into the one address window
+ * this frame opened. The row is the only frame-sized buffer in the app: 480 B, against the
+ * 115,200 B of .bss a 240x240 canvas used to cost - and .bss is Lua heap here (app.ld puts .pool
+ * right behind it). */
 static uint16_t pv_row[GDI_OUT_W];
 static uint8_t pv_row_sx[GDI_OUT_W];        /* pv_sx is the SysEx buffer further down */
 static uint8_t pv_row_sx_ready;
@@ -93,14 +94,17 @@ static void pv_push(void)
         gdi_sx_init(pv_row_sx);
         pv_row_sx_ready = 1;
     }
+    lcd_stream_begin(0u, 0u, GDI_OUT_W, GDI_OUT_H);
     for (y = 0; y < GDI_OUT_H; y++) {
+        lcd_stream_wait();              /* the previous row is still on the wire */
         gdi_expand_row(p8_screen_fb, pv_row_sx, y, pv_row);
         for (x = 0; x < GDI_OUT_W; x++) {
             uint16_t v = pv_row[x];
             pv_row[x] = (uint16_t)((v >> 8) | (v << 8));
         }
-        lcd_blit(0u, (uint32_t)y, GDI_OUT_W, 1u, pv_row);
+        lcd_stream_row(pv_row, GDI_OUT_W);
     }
+    lcd_stream_end();
     p8_panel_draws++;
     p8_panel_bytes += (uint32_t)GDI_OUT_W * GDI_OUT_H * 2u;
 }

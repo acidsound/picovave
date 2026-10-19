@@ -257,7 +257,6 @@ typedef enum {
 } p8_error_severity_t;
 
 extern unsigned m_fps;
-extern unsigned m_actual_fps;
 extern unsigned m_frames;
 
 #ifdef OS_FREERTOS

@@ -12,8 +12,9 @@
  * one: baba_demake-9 needs an arena of about 400 KB, and the old canvas could not leave it.
  *
  * gdi_display_update_async() stays the frame boundary, and stays where the scale happens:
- *   device   (src/picovave.c)           240-pixel row at a time into lcd_blit(), byte swapped
- *                                       for the ST7789: a whole frame is never in RAM
+ *   device   (src/picovave.c)           one address window per frame, then 240-pixel rows
+ *                                       streamed into it, byte swapped for the ST7789: a whole
+ *                                       frame is never in RAM
  *   browser  (femto8/seam/seam_sim.c)   expanded into its own 240x240, which sim_fb() exposes
  *   preview  (host/preview.c)           expanded into its own 240x240 capture, for the PPM
  * so the page, the preview and the ROM still show the same pixels (tools/verify_final.py).

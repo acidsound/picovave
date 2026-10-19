@@ -1,6 +1,6 @@
 # 핸드오버 — picovave (SMK-37 Pro PICO-8 펌웨어) 현재 상태
 
-작성 2026-10-17, 갱신 2026-10-18. 이 문서는 **다음 사람(또는 다음 세션)이 이어받기 위한 것**이다.
+작성 2026-10-17, 갱신 2026-10-19. 이 문서는 **다음 사람(또는 다음 세션)이 이어받기 위한 것**이다.
 소스·툴·시뮬레이터는 완성되어 있고, 실기에서 나온 결함 두 건(부팅 크래시 · 카트가 기기 풀보다 클 때의
 멈춤)은 **원인을 확정해 고쳤다**(§7). 남은 것은 **실기 확인 한 번**이다(§11). 확정된 사실과 아직 아닌
 것을 명확히 구분해 적었다 — 추측을 사실처럼 읽지 말 것.
@@ -16,12 +16,13 @@
 | 펌웨어 부팅 | **원인 확정·수정 완료.** 원인은 "야생 SP"가 아니라 **newlib `setjmp`의 sp 사용 vs 하드웨어 EMU 스택 창**이었다(§7) |
 | 원인 규명 | **100%** — 디스어셈블리로 증명(§7). 피해자는 `setjmp`, 가해자도 `setjmp` |
 | 카트가 기기 풀보다 클 때 | **원인 확정·수정 완료(2026-10-18).** 실기에서 멈추던 것(부팅 화면 고정)은 하드웨어가 아니라 **래더가 후보 사이에 풀을 돌려주지 않은 것**이었다. 이제 거부된 카트는 **기본 카트로 폴백해 계속 실행**된다(§7 두 번째 결함) |
-| 45 KB 카트(baba) | **기기에서 돈다.** 캔버스를 PICO-8 크기로 줄이고 예약 RAM을 회수해 아레나를 414,184 B(Lua 힙 413,160 B)로 넓혔다 — 실측 baba peak 402 KB·거부 5회/300프레임, 즉 가끔 GC 히치만 있고 실행된다(§13) |
-| 실기 사용 가능 여부 | **확인 대기** — 태그 `3df2cb19` 패키지가 부팅 수정 + 래더 폴백 + §13 메모리 회수를 함께 담은 빌드다. 사진 한 장이면 확정된다(§11) |
+| 45 KB 카트(baba) | **기기에서 돈다.** 캔버스를 PICO-8 크기로 줄이고 예약 RAM을 회수해 아레나를 414,936 B(Lua 힙 413,912 B)로 넓혔다 — 실측 baba peak 402 KB·거부 5회/300프레임, 즉 가끔 GC 히치만 있고 실행된다(§13) |
+| 화면 주사율 | **표시 경로 최적화 완료(§15).** 12 MHz SPI + 240개 행별 윈도우 → 30 MHz SPI + 프레임당 윈도우 1개. 115,200 B 전송은 ~77 ms에서 ~31 ms로 줄었다. 상단 FPS 숫자는 제거했다(엔진의 목표 프레임 기반 추정값이라 실측과 달랐다) |
+| 실기 사용 가능 여부 | **확인 대기** — 태그 `784914b2` 패키지가 부팅 수정 + 래더 폴백 + §13 메모리 회수 + §15 표시 경로 최적화를 함께 담은 빌드다. 사진 한 장이면 확정된다(§11) |
 
-build/`picovave.fwsc`(**태그 `3df2cb19`**)가 현재 패키지다. `e5e5d778`(부팅 크래시 수정)과
-`68c5e5f1`(`f65c25d`·`55a7de4`)은 그 앞선 라운드들이고, 이번 커밋이 아레나를 넓혀 45 KB 카트를
-기기에서 돌린다(§12·§13). 태그는 빌드 입력 전체의 sha256 앞 8자리이므로 **문서만 고쳐도 바뀐다** —
+build/`picovave.fwsc`(**태그 `784914b2`**)가 현재 패키지다. `e5e5d778`(부팅 크래시 수정)과
+`68c5e5f1`(`f65c25d`·`55a7de4`)은 그 앞선 라운드들이고, §13이 아레나를 넓혀 45 KB 카트를
+기기에서 돌렸다. 태그는 빌드 입력 전체의 sha256 앞 8자리이므로 **문서만 고쳐도 바뀐다** —
 `--ask`가 말하는 값과 이 문서가 말하는 값이 다르면 그 문서가 오래된 것이다.
 
 ---
@@ -88,7 +89,7 @@ AC79_SDK=/Users/spectrum/fw-AC79_AIoT_SDK python3 tools/build_picovave.py
 #   -> "tag <8hex>" 를 출력. 산출물 build/picovave.fwsc
 #   -> 플래싱·증거용으로 build/picovave-<tag>.fwsc 복사본을 남겨둘 것
 
-# 검증 (204검사, 인자 없음)
+# 검증 (전체 검사, 인자 없음)
 python3 tools/verify_final.py > /tmp/suite.log 2>&1      # 반드시 로그로 리다이렉트(SIGPIPE)
 #   macOS에는 timeout 명령이 없다. 로그 마지막 줄 "all checks passed" + 종료코드 0 확인.
 #   AC79_SDK가 없으면 읽기 전용 packer 교차검증 한 건이 "(skipped: ...)"로 표시된다(정상).
@@ -123,9 +124,9 @@ python3 -c "import sys;sys.path.insert(0,'tools');import preview_picovave;previe
 
 ```
 .ram_text     0x01C00000 .. 0x01C00BE4  플래시가 바쁠 때 도는 코드(3,044 B; 리전은 0x01C01400까지)
-.data/.bss    0x01C01400 .. _bss_end    앱의 정적 데이터(2026-10-18: 0x01C0EE18, 55,832 B)
+.data/.bss    0x01C01400 .. _bss_end    앱의 정적 데이터(2026-10-19: 0x01C0EB28, 55,080 B)
 _pool_start   = _bss_end                .pool은 .bss **바로 뒤**에 온다(한 RAM 리전)
-_pool_top     0x01C74000                = _guard0. 아레나 = _pool_top − _pool_start (414,184 B)
+_pool_top     0x01C74000                = _guard0. 아레나 = _pool_top − _pool_start (414,936 B)
 _guard0       0x01C74000               쓰기 감시 밴드
 _ustack_lo    0x01C74100  ┐
 _ustack_top   0x01C7A000  ┘  사용자 스택 24,320 B   (crt0 sp = _ustack_init = 0x01C79C00)
@@ -340,7 +341,7 @@ return하는 두 번째 버그가 드러났다.
 | flipside_-1 | 204~215 KB | 실행 (여유 72~83 KB) |
 | baba_demake-9 · bunnysurvivor-9 · fighter_street_ii-1 · terra_1cart-44 | 285~293 KB (거부 5~12회) | **기기 불가 → 기본 카트로 폴백** |
 
-(§13에서 아레나를 414,184 B로 넓히자 baba·fighter·terra는 **실행**으로 바뀌었다. 그 표가 지금의 값이다.)
+(§13에서 아레나를 414,936 B로 넓히자 baba·fighter·terra는 **실행**으로 바뀌었다. 그 표가 지금의 값이다.)
 
 같은 카트가 PicoPico(ESP32-WROVER-B, PSRAM 8 MB)에서 도는 것은 **인터프리터 차이가 아니다**: femto8도
 z8lua를 vendor한다(`femto8/src/lua/luaconf.h`: `#define LUA_NUMBER fix32_t`, 16.16 고정소수점).
@@ -382,18 +383,19 @@ image 234228 B (slot 0x97400) · RAM .data+.bss 145608 B of 147456 · Lua heap 2
 package 651271 B, identity 'SMK-37 Pro_700', tag e5e5d778
 tools/build_sim.py --engine docker                 boots=31, draws=191, parity=ok
 tools/build_sim.py --device-alloc --stack 24320     all ok (거부→폴백 검사 포함)
-verify_final.py                                    204검사 all checks passed
+verify_final.py                                    전체 검사 all checks passed
 ```
 
 ---
 
 ## 9. 그 다음 우선순위
 
-1. **실기 확인(이번 라운드)** — `build/picovave.fwsc`(태그 `3df2cb19`)를 플래싱하고 **세 장면**을 본다:
+1. **실기 확인(이번 라운드)** — `build/picovave.fwsc`(태그 `784914b2`)를 플래싱하고 **세 장면**을 본다:
    (a) 부팅 → 부팅 화면(`PICOVAVE BOOT`, `STACK n/5F00` 여유) → **기본 카트 화면**(버튼으로 픽셀을
-   옮기는 화면) + `--ask`의 `build 3df2cb19`;
+   옮기는 화면) + `--ask`의 `build 784914b2`; 화면이 이전보다 부드러운지, 30 MHz에서 점 노이즈가
+   없는지도 함께 본다(있으면 §15의 `LCD_BAUD 2` 폴백);
    (b) 페이지에서 **baba와 loop-4를 FLASH(USB)로 업로드** → 패널이 그 카트를 **실행**한다(§13:
-   아레나가 414,184 B라 45 KB 스크립트가 들어간다; baba는 가끔 GC 히치). 페이지의 카트 줄은
+   아레나가 414,936 B라 45 KB 스크립트가 들어간다; baba는 가끔 GC 히치). 페이지의 카트 줄은
    `기기 빠듯`(주황)으로 미리 알려준다 — **폴백하지 않는다**;
    (c) 페이지에서 **못 돌리는 카트(bunnysurvivor)를 업로드** → 패널이 **멈추지 않고 기본 카트로
    폴백**(§7 두 번째 결함)하고 USB/OTA가 계속 살아 있다.
@@ -463,12 +465,13 @@ verify_final.py                                    204검사 all checks passed
 
 - **정상이면**: 기본 카트 화면 + 부팅 화면의 `BUILD`/`STACK n/5F00`만 확인하면 된다. 그 화면이
   뜨면 §7의 부팅 수정이 맞은 것이다. 이어서 페이지에서 **baba를 FLASH(USB)로 업로드**해 보고 패널이
-  **baba를 실행하면**(§13: 45 KB 스크립트가 아레나 414,184 B에서 돈다 — 가끔 GC 히치, **폴백하지
+  **baba를 실행하면**(§13: 45 KB 스크립트가 아레나 414,936 B에서 돈다 — 가끔 GC 히치, **폴백하지
   않는다**) 이번 라운드의 목표가 확인된다. 못 돌리는 카트(예: bunnysurvivor)를 올려 **기본 카트로
-  폴백하고 멈추지 않는 것**은 §7 두 번째 결함의 확인이다.
+  폴백하고 멈추지 않는 것**은 §7 두 번째 결함의 확인이다. 화면이 30 MHz에서 깨끗한지도 §15의
+  실기 확인 항목이다.
 - **죽으면**: `BUILD`(무엇이 올라갔는지), `PC`, `EMU/DBG`, `SP`, `DEEP`, `WILD` — 이 여섯 줄.
   `EMU 0008 DBG 0000` + `PC`가 `setjmp`라면 **이번 수정이 안 들어간 패키지**인지부터 확인할 것
-  (`--ask`로 태그 확인, 기대값은 §13의 태그).
+  (`--ask`로 태그 확인, 기대값은 §0의 `784914b2`).
 - **멈추면**(크래시 화면 없이 화면이 안 움직이면): §7 두 번째 결함의 증상이다 — 이 패키지에서는
   `p8_stop_cart()`가 후보 사이에 풀을 돌려주므로 나오지 않아야 한다. 나온다면 `--ask`로 태그부터.
 - 크래시 기록은 `.noinit`이라 리셋을 넘어 살아남는다. 부팅 후 10초 동안 같은 화면이 다시 뜬다.
@@ -550,8 +553,9 @@ peak@1=peak@300)와 컴파일 천장을 올린다.
 (`femto8/src/p8_emu.c`의 `p8_render()`). 128→240 최근접 확대는 표시 경로
 (`femto8/seam/gdi.h`의 `gdi_expand_row()`)로 내려갔고, 세 소비자가 그 한 함수를 쓴다:
 
-- **기기**(`src/picovave.c`): 한 줄(240 px)씩 `lcd_blit()`으로 밀어넣는다 — 패널 한 프레임이 RAM에
-  **동시에 존재하지 않는다**.
+- **기기**(`src/picovave.c`): 프레임마다 주소 창을 한 번만 열고, 한 줄(240 px)씩
+  `lcd_stream_row()`로 밀어넣는다 — 패널 한 프레임이 RAM에 **동시에 존재하지 않고**, 행마다 창을
+  다시 잡던 240회의 명령 시퀀스도 사라졌다(§15).
 - **wasm 시뮬레이터**(`femto8/seam/seam_sim.c`)와 **호스트 프리뷰**(`host/seam_host.c`): 각자의
   240×240 캡처로 편다.
 
@@ -568,8 +572,8 @@ peak@1=peak@300)와 컴파일 천장을 올린다.
 0x01C00000..0x01C01400). 0x01C06000..0x01C08000의 "RAM 실행 디버그" 예약은 **참조하는 코드가 없어**
 함께 회수했다(전 소스 확인: 하드코딩된 `0x01C08000`도 없다).
 
-**결과**: `.data+.bss` 137,544 → **55,832 B**, 아레나 304,824 → **414,184 B**
-(`0x01C0EE18..0x01C74000`), Lua 힙 303,800 → **413,160 B**.
+**결과**: `.data+.bss` 137,544 → **55,080 B**, 아레나 304,824 → **414,936 B**
+(`0x01C0EB28..0x01C74000`), Lua 힙 303,800 → **413,912 B**.
 
 **baba는 이제 기기에서 돈다.** 실측(기기 allocator, 기기 아레나, 300프레임):
 
@@ -585,7 +589,7 @@ peak@1=peak@300)와 컴파일 천장을 올린다.
 
 **60초(1800프레임) 장주행**(`tools/probe_carts.mjs --sweep`, 아레나를 바꿔 가며): baba는
 **384 KB에서 죽고**(status 4 = `LUA_ERRMEM`, 거부 15회) **400 KB에서 산다**(거부 33회). 지금
-아레나가 414,184 B = 404 KB이므로 **여유는 4 KB 남짓**이다 — 1800프레임에서도 살아남지만, 그
+아레나가 414,936 B = 404 KB이므로 **여유는 4 KB 남짓**이다 — 1800프레임에서도 살아남지만, 그
 이하로 내려가면 다시 부팅 실패다. flipside와 loop-4는 어느 아레나에서도 거부 0회,
 bunnysurvivor는 항상 로드 실패 → 내장 카트 폴백이다.
 
@@ -609,11 +613,11 @@ bunnysurvivor는 항상 로드 실패 → 내장 카트 폴백이다.
 | `femto8/seam/gdi.h` | 캔버스 계약: PICO-8의 128×128 RGB565(`GDI_W/H`), `gdi_expand_row()`(128→240 최근접 확대), `gdi_sx_init()` |
 | `femto8/src/p8_emu.c` | `p8_render()`가 128×128에 1:1로 렌더; `screen_transform_pixel`/`high_color_resolve`를 `#ifdef SDL` 밖으로 |
 | `femto8/seam/seam_device.c`·`seam_sim.c` · `host/seam_host.c` | 세 소비자가 `gdi_expand_row()`로 각자의 240×240 캡처를 채운다(기기는 한 줄씩 패널로) |
-| `src/picovave.c` | `pv_push`/`pv_blit`(한 줄 240 px씩 `lcd_blit`), 앱 화면 좌표/문자열, sx 테이블 `pv_row_sx` |
+| `src/picovave.c` | `pv_push`/`pv_blit`(프레임당 윈도우 1개 + 한 줄 240 px씩 스트리밍), 앱 화면 좌표/문자열, sx 테이블 `pv_row_sx` |
 | `src/picovave_gfx.h` | 앱 캔버스가 엔진 표면 앨리어스(`hg_fb` → `p8_screen_fb`); 크래시 화면 헤드라인 + 12줄(`V01 EMU0008 DBG0000` = 19자, 여백 확보) |
 | `platform/firmware/app.ld` | RAMTEXT `0x1400`, RAM `0x01C01400` + `0x72C00`(예약 회수) |
 | `tools/build_picovave.py` | `RAM_ORIGIN`/`RAM_LEN`, `.data+.bss`·아레나를 **링커 심볼**에서 읽는다 |
-| `sim/device_alloc.c` · `host/alloc_test.c` · `sim/sim_test.mjs` · `sim/heap_probe.c` · `web/sim/index.html` | 아레나 414,184 B 일치(5중 검사) |
+| `sim/device_alloc.c` · `host/alloc_test.c` · `sim/sim_test.mjs` · `sim/heap_probe.c` · `web/sim/index.html` | 아레나 414,936 B 일치(5중 검사) |
 | `tools/build_sim.py` | **기본** 빌드가 기기 allocator(`sim/device_alloc.c`)로 기기 아레나에서 돈다(`--probe-alloc`이 비용 모델) |
 | `tools/verify_final.py` | 캔버스 격자 기반 크래시 밴드 검사(줄 여백 포함), 5중 아레나 일치 검사, "페이지 wasm = 기기 allocator" 검사 |
 | `tools/probe_carts.mjs` | 새 도구: 카트별 peak/거부/최종 슬롯 실측(§13 표·스윕의 근거). `node tools/probe_carts.mjs build/sim/sim.wasm` |
@@ -672,3 +676,60 @@ baba의 **런타임** 피크(403→404 KB)는 그대로다 — 컴파일은 로�
 **남은 것**: 64 KB 카트의 바이트코드는 50 KB 안팎이라 한 슬롯(105,656 B)에 들어간다. 다만
 bunnysurvivor처럼 **런타임**이 아레나를 넘는 카트는 바이트코드로도 살아나지 않는다(로드는 되고
 첫 프레임에서 죽는다) — 그건 메모리 문제이고, 이 경로가 바꾸는 것은 로드 쪽이다.
+
+---
+
+## 15. 실기 FPS: 표시 경로가 병목이었다 (2026-10-19)
+
+**신고**: 실기에서 PICO-8 카트가 느리고, 화면 왼쪽 위의 FPS 숫자가 실제 체감과 맞지 않는다.
+
+**먼저 지운 것.** 왼쪽 위 숫자는 `p8_render()`가 PICO-8 화면(0,0)에 직접 그리던
+`m_actual_fps`였다. 이 값은 `p8_flip()`에서 `1000 / (elapsed + sleep)`로 만든 **목표 프레임
+기반 추정치**라, 패널 전송이 끝나기 전에 계산되고 실제 표시 주사율과 무관했다. SDL/기기 두
+렌더 경로에서 그리기를 지우고, `m_actual_fps` 전역과 헤더 선언도 함께 없앴다.
+
+**병목은 LCD 전송이었다.** 240×240 RGB565 한 프레임은 115,200 B다. 스톡 v016과 같은 SPI
+분주비 `4`(이 보드의 lsb_clk 60 MHz 기준 ~12 MHz)에서는 순수 전송만
+`115,200 × 8 / 12,000,000 ≈ 76.8 ms`다. 엔진이 아무리 빨라도 **이론상 13 fps**가 상한이고,
+여기에 240개 행마다 주소 창을 다시 잡던 명령·동기화 오버헤드가 더해졌다.
+
+**바꾼 것:**
+
+| 항목 | 이전 | 지금 | 효과 |
+|---|---|---|---|
+| 주소 창 | 행마다 `lcd_blit()` → 240회 `0x2A/0x2B/0x2C` + 매번 동기화 | 프레임 시작에 한 번, 이후 CS를 low로 유지하고 행을 연속 전송 | 명령/동기화 240회 제거 |
+| SPI 분주비 | `LCD_BAUD 4` (~12 MHz) | `LCD_BAUD 1` (~30 MHz) | 전송 76.8 ms → **30.7 ms** |
+| 팔레트 변환 | 픽셀마다 `color_get()` + `color_index()` + `m_colors[]` | 프레임마다 16-entry `screen_lut[16]`/`overlay_lut[16]`, 일반 경로는 룩업 1회 | 16,384픽셀의 변환 비용 감소 |
+| 오버레이 합성 | 항상 128×128 전체를 훑음 | `p8_show_io_icon(true)`일 때만 (`overlay_visible`) | cartdata를 안 쓰는 카트는 16,384픽셀 패스 생략 |
+
+**실기에서 잡은 첫 버그(2026-10-19).** 첫 스트리밍 빌드는 `lcd_stream_row()`가 행 길이를
+**픽셀 수(240)**로 넘겼는데 `fm1_lcd_send_data()`는 **바이트 수**를 받는다. 그래서 행마다 240 B
+= 120픽셀만 전송됐고, 240열 창에 두 행이 겹쳐 들어가 **화면 왼쪽 절반이 상단 좌/우에 중복**되어
+보였다. 지금은 `pixels * 2u`로 변환하며, 같은 실수가 다시 들어오면 `verify_final.py`가 실패한다.
+
+**남는 상한과 주의:**
+
+- 전송만 30.7 ms이므로 30 fps의 33.3 ms 예산에 거의 다 쓴다. 엔진/스케일/입력 비용이 더해지면
+  30 fps에 못 미칠 수 있고, `_update60` 카트는 프레임마다 렌더하므로 표시 경로만으로 60 fps를
+  보장할 수 없다. 이번 변경은 **표시 병목을 13 fps 상한에서 약 30 fps 상한으로 올린 것**이다.
+- 30 MHz는 ST7789 계열 모듈에서 흔히 쓰이지만 데이터시트의 보수적인 write cycle보다 빠르다.
+  실기에서 색 번짐·점 노이즈가 보이면 `picovave/platform/firmware/src/lcd.c`의 `LCD_BAUD`를
+  `2`(~20 MHz, 전송 ~46 ms)로 내리는 것이 첫 폴백이다. 그 경우 30 fps 예산은 다시 빠듯해진다.
+- **실기 측정은 아직 없다.** 시뮬레이터/호스트 픽셀 패리티와 패키지 검증은 통과했지만, 실제
+  패널에서의 체감 FPS와 30 MHz 안정성은 태그 `784914b2`를 플래싱해 확인해야 한다.
+
+**건드린 파일**: `femto8/src/p8_emu.c`(FPS 오버레이 제거, 팔레트 LUT, 오버레이 스킵),
+`femto8/src/p8_emu.h`(`m_actual_fps` 제거), `platform/firmware/src/lcd.c`(`LCD_BAUD`,
+`lcd_stream_begin/wait/row/end`), `src/picovave.c`(`pv_push()`가 프레임당 윈도우 하나를 열고
+행을 스트리밍), `tools/verify_final.py`(행별 `lcd_blit` 대신 스트리밍 API를 검사).
+
+## 16. 웹 UI 한국어 / English 전환 (2026-10-19)
+
+시뮬레이터 페이지 상단에 **한국어 / EN** 버튼을 두었다. 기본은 한국어이고(실기의 언어),
+선택은 `localStorage`에 기억되며 `?lang=ko` / `?lang=en`으로도 강제할 수 있다. 정적 문구는
+`renderStatic()`이 ID별로 다시 쓰고, 동적 상태·로그·카트 판정은 `t(key, vars)` 사전을 거친다.
+언어를 바꾸면 현재 상태·패키지 목록·카트 대상 버튼·DEVICE 화면도 즉시 다시 그린다.
+
+**건드린 파일**: `web/sim/index.html`(사전 + `renderStatic()` + 상태/로그 호출),
+`sim/run_page.mjs`(로딩 문자열의 잘못된 코드포인트 수정, 한국어/English 전환 검사),
+`tools/verify_final.py`(warn 경로 검사가 새 구조를 따르게 수정).

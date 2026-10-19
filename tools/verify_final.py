@@ -280,6 +280,15 @@ def main():
           ", ".join(own_intr[:5]))
     check("image installs Makkuro37's TIMER5 and ALNK0 handlers",
           "isr_timer5" in dis and "isr_alnk0" in dis)
+    # The old top-left number was m_actual_fps, computed by p8_flip() from the TARGET frame time
+    # before the panel transfer -- it did not describe what the panel showed, and it painted over
+    # the cart's own screen. It must not come back (docs/HANDOVER.md §15).
+    emu_c = (SRC / "femto8" / "src" / "p8_emu.c").read_text()
+    emu_h = (SRC / "femto8" / "src" / "p8_emu.h").read_text()
+    check("the engine does not paint a target-derived fps number into the cart screen",
+          "m_actual_fps" not in emu_c and "m_actual_fps" not in emu_h
+          and 'draw_simple_text(m_str_buffer' not in emu_c
+          and 'draw_text(m_str_buffer' not in emu_c)
     # The watchdog is the device's: armed in the SPL entry before anything else - before the
     # panel even comes up, so a hang during boot still resets - and fed from the main loop, not
     # from the TIMER5 ISR (feeding it there would defeat the safety net it exists to be).
@@ -551,7 +560,7 @@ def main():
           "async function measureCart" in page and "ex.sim_heap_peak()" in page
           and "probeMods[fw]" in page and "MEASURE_FRAMES" in page)
     check("the page says the verdict in words, and warns instead of claiming success",
-          "기기 OK" in page and "기기 불가" in page and 'className = "warn"' in page)
+          "기기 OK" in page and "기기 불가" in page and 'setStatus("warn"' in page)
     check("the measurement leaves the running simulator alone (its own store and heap)",
           "instantiateModule(mod)" in page.split("async function measureCart", 1)[-1]
           .split("async function loadCart", 1)[0])
@@ -848,12 +857,20 @@ def main():
           "fm1_in.pad_press" in fw and "fm1_in.fader" in fw and "fm1_in.wheel" in fw)
     # The panel push. femto8 renders NATIVE RGB565 into p8_screen_fb (PICO-8's own 128x128), and
     # pv_push() expands ONE row (gdi_expand_row), swaps that row for the ST7789's big endian and
-    # hands it to lcd_blit - so a whole 240x240 panel frame never exists in RAM. That row buffer is
+    # streams it into a single address window - so a whole 240x240 panel frame never exists in
+    # RAM, and the 240 per-row window setups the first version did are gone. That row buffer is
     # what bought back the 82,432 B the old 240x240 canvas held (docs/HANDOVER.md §13).
-    check("the device expands the engine's 128x128 screen one row at a time, swapped for the panel",
+    check("the device streams the engine's 128x128 screen one row at a time, swapped for the panel",
           "gdi_expand_row(p8_screen_fb" in fw and "(v >> 8) | (v << 8)" in fw
-          and "lcd_blit(0u, (uint32_t)y, GDI_OUT_W, 1u, pv_row)" in fw
+          and "lcd_stream_begin(0u, 0u, GDI_OUT_W, GDI_OUT_H)" in fw
+          and "lcd_stream_row(pv_row, GDI_OUT_W)" in fw
           and "static uint16_t pv_row[" in fw)
+    # This one bit the hardware: lcd_stream_row() counted pixels, but the HAL takes bytes. A
+    # 240-pixel row then sent 240 bytes (120 pixels) into a 240-column window, so the panel packed
+    # two source rows into one - the left half of the screen appeared twice, top-left/top-right.
+    lcd_c = (SRC / "platform" / "firmware" / "src" / "lcd.c").read_text()
+    check("the row streamer converts pixels to bytes for the SPI HAL",
+          "fm1_lcd_send_data(px, pixels * 2u)" in lcd_c)
     check("the host preview captures the same seam expansion of the same surface",
           "gdi_display_update_async(0, 0)" in hal_files["preview"]
           and "memcpy(cap, p8_panel_fb" in hal_files["preview"])

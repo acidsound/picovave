@@ -179,7 +179,7 @@ FM1_GUARD_PC)` + `FM1_EMU_CON &= ~(1u<<3)`). 즉 **`EMU bit3`(sp 창 밖) 크래
 
 ```sh
 python3 tools/ota_probe.py --ask
-#   ...  <- identity: SMK-37 Pro_700  build 3df2cb19
+#   ...  <- identity: SMK-37 Pro_700  build 784914b2
 ```
 
 - `build xxxxxxxx`가 **이번 패키지의 태그와 같으면** 플래싱이 들어간 것이다(`build_picovave.py`가
@@ -339,7 +339,7 @@ shasum -a 256 build/picovave.app-area.bin check.bin   # 같은 해시
 SysEx로 실기 SLOOP 스토어에 `.p8.png` 카트를 쓴다. 텍스트 `.p8`은 받지 않는다. CLI
 `tools/fm1_install.py`에는 아직 카트 명령이 없다 — 실기 카트는 페이지의 FLASH(USB)로 넣는다).
 
-> 기기 풀(Lua 힙 413,160 B, 엔진이 카트가 도는 동안 ~74 KB 사용)을 넘겨 **카트가 로드조차 안 되면**
+> 기기 풀(Lua 힙 413,912 B, 엔진이 카트가 도는 동안 ~74 KB 사용)을 넘겨 **카트가 로드조차 안 되면**
 > 기기는 그것을 거부하고 **기본 카트로 폴백**한다 — 패널이 멈추지 않는다(롤백 사다리: 최신 슬롯 →
 > 그것이 대체한 슬롯 → 내장 기본 카트). 아레나 끝에서 겨우 도는 카트는 폴백하지 않고 대신 가끔
 > GC 히치가 생긴다. 페이지는 업로드 전에 **기기와 같은 할당자·같은 아레나**로 그 카트를 실제로 돌려

@@ -147,7 +147,7 @@ fs.unlinkSync(tmp);
 
 /* wait for the page's own boot() to settle */
 const deadline = Date.now() + 3000;
-const LOADING = "wasm " + String.fromCharCode(47196, 46301) + " " + String.fromCharCode(51473, 8230);
+const LOADING = "wasm " + String.fromCharCode(47196, 46377) + " " + String.fromCharCode(51473, 8230);
 while (Date.now() < deadline) {
   if (uncaught.length) break;
   const s = elements["status"];
@@ -171,6 +171,21 @@ check("page wired POWER-ON", !!(listeners["boot"] && listeners["boot"].click));
 check("page wired TICK", !!(listeners["refresh"] && listeners["refresh"].click));
 check("page wired SOUND", !!(listeners["sound"] && listeners["sound"].click));
 check("page defaults to PICOVAVE", txt("device") === "PICOVAVE", txt("device"));
+check("page offers a Korean/English switch",
+      !!(listeners["langKo"] && listeners["langKo"].click &&
+         listeners["langEn"] && listeners["langEn"].click), "");
+fire("langEn", "click");
+check("English switch translates the static UI and the current status",
+      txt("statssum") === "Stats" && txt("lblDraws") === "draws" &&
+      /^Running ·/.test(txt("status")) && /flash \/ carts/.test(txt("devtitle")) &&
+      /Upload cart/.test(txt("cartSend")) && txt("helpsumm") === "Help · key map",
+      txt("status").slice(0, 60) + " | " + txt("cartSend"));
+fire("langKo", "click");
+check("Korean switch restores the Korean UI and the current status",
+      txt("statssum") === "상태" && txt("lblDraws") === "갱신" &&
+      /^실행 중 ·/.test(txt("status")) && /플래시 \/ 카트/.test(txt("devtitle")) &&
+      /카트\(\.p8\.png\) 업로드/.test(txt("cartSend")),
+      txt("status").slice(0, 60) + " | " + txt("cartSend"));
 check("page would load picovave's worklet as the audio engine", /\.\/worklet\.js/.test(html));
 check("page wires SIMULATOR and FLASH(USB) as separate controls",
       !!(listeners["simPicovave"] && listeners["simRestore"] &&
@@ -262,6 +277,11 @@ if (sampleCart) {
     check("the page measured the cart in the device's arena before sending it",
           /기기 (OK|불가|빠듯)/.test(txt("cartsay")) && /거부/.test(txt("cartsay")) &&
           /peak/.test(txt("cartsay")), txt("cartsay"));
+    fire("langEn", "click");
+    check("English switch re-renders a loaded cart's compile and fit verdict",
+          /bytecode/.test(txt("cartsay")) && /device (OK|is tight|cannot run|verdict)/.test(txt("cartsay")) &&
+          !/[가-힣]/.test(txt("cartsay")), txt("cartsay"));
+    fire("langKo", "click");
     if (/기기 불가/.test(txt("cartsay")))
       check("...and warned instead of claiming success", elements.status.className === "warn",
             txt("status"));
@@ -417,50 +437,54 @@ try {
 /* ---- the PC keyboard, and what the page prints on the panel ----
  * Both halves of one promise, and both come from src/picovave_p8.h's pv_gamepad(): a pad or a
  * keybed key carries a PICO-8 control written on it ONLY because the firmware reads that input for
- * that control, and PICO-8's own default PC keys (the arrows, Z, X, ESC, ENTER) drive exactly
- * those inputs - so the label printed on a pad is also the key to press for it. The bit numbers
- * here are read off pv_gamepad(): pads 1/8/9/10 for the D-pad, 15/14 for ⬥/❎ and 12/13 for
- * ⬜/🌵, the low keys 5/7 8/10 9 11/12 for the same D-pad, and key 31 / key 32 (lo bit 31) and
- * key 33 / key 36 (hi bit 1 / bit 4) for ⬜ / 🌵 / ⬥ / ❎.
- * ⬥ and ❎ are the engine's own two action buttons: p8_input.h BUTTON_ACTION1 (femto8's p8_lua.c
- * names glyph 142 "O/Z") and BUTTON_ACTION2 (glyph 151, "X") - which is why Z goes with ⬥.
- * ⬜ and 🌵 are PICO-8's other two. 🌵 reaches a cart as its own Start (p8_input.c maps it to
- * BUTTON_MASK_PAUSE, which btn() hands out as btn(6)); ⬜ is not a cart button - p8_emu.c's
- * p8_check_for_pause() aborts the running cart and the harness re-begins it. sim_test.mjs drives
- * both through the real engine. */
+ * that control, and PICO-8's own default PC keys (the arrows, Z, X, ENTER) drive exactly those
+ * inputs - so the icon printed on a pad is also the key to press for it. The bit numbers here are
+ * read off pv_gamepad(): pads 1/8/9/10 for the D-pad, 15/14 for O/X and 13 for Pause, the low keys
+ * 5/7 8/10 9 11/12 for the same D-pad, and key 32 / key 33 / key 36 (hi bit 0 / bit 1 / bit 4) for
+ * Pause / O / X.
+ * O and X are the engine's own two action buttons: p8_input.h BUTTON_ACTION1 (femto8's p8_lua.c
+ * names glyph 142 "O/Z") and BUTTON_ACTION2 (glyph 151, "X") - which is why Z goes with O.
+ * Pause is PICO-8's sixth button: ENTER / P is PICO-8's Pause key (p8_input.c maps it to
+ * BUTTON_MASK_PAUSE, which btn() hands out as btn(6)). PICO-8 has no separate restart control, so
+ * the page prints none; sim_test.mjs still drives the engine's own abort input directly.
+ * The page prints each control as an icon from its own SVG sprite, never as a text glyph - so
+ * these checks name the sprite a pad or key must reference (href="#ic-<name>"). */
+const iconOf = (el) => {
+  const m = (el && el.innerHTML || "").match(/href="#ic-([a-z]+)"/);
+  return m ? m[1] : null;
+};
 try {
   const P8 = [
-    // pc key      the panel input it drives   the label the page must print there
-    ["ArrowUp",    "pad1",  "<i>↑</i>"],
-    ["ArrowLeft",  "pad8",  "<i>←</i>"],
-    ["ArrowDown",  "pad9",  "<i>↓</i>"],
-    ["ArrowRight", "pad10", "<i>→</i>"],
-    ["z",          "pad15", "<i><b>⬥</b>Z</i>"],
-    ["x",          "pad14", "<i><b>❎</b>X</i>"],
-    ["Escape",     "pad12", "<i><b>⬜</b>ESC</i>"],
-    ["Enter",      "pad13", "<i><b>🌵</b>⏎</i>"]
+    // pc key      the panel input it drives   the icon the page must print there
+    ["ArrowUp",    "pad1",  "up"],
+    ["ArrowLeft",  "pad8",  "left"],
+    ["ArrowDown",  "pad9",  "down"],
+    ["ArrowRight", "pad10", "right"],
+    ["z",          "pad15", "o"],
+    ["x",          "pad14", "x"],
+    ["Enter",      "pad13", "pause"]
   ];
   let wrong = [];
   for (const one of P8) {
-    const key = one[0], id = one[1], label = one[2], el = elements[id];
+    const key = one[0], id = one[1], icon = one[2], el = elements[id];
     if (!el) { wrong.push(id + " was never built"); continue; }
-    if (el.innerHTML !== label) { wrong.push(id + " prints " + JSON.stringify(el.innerHTML)); continue; }
+    if (iconOf(el) !== icon || !/<i>/.test(el.innerHTML || "")) { wrong.push(id + " prints " + JSON.stringify(el.innerHTML)); continue; }
     fireKey("keydown", key);
     const down = el.classList.contains("down");
     fireKey("keyup", key);
     if (!down || el.classList.contains("down")) wrong.push(key + " does not hold " + id + " down and let it go");
   }
-  check("PICO-8's default PC keys drive the pads that carry their labels", wrong.length === 0, wrong.join("; "));
+  check("PICO-8's default PC keys drive the pads that carry their icons", wrong.length === 0, wrong.join("; "));
 
   wrong = [];
-  const onKeys = [["key5", "←"], ["key7", "←"], ["key8", "↑"], ["key10", "↑"], ["key9", "↓"],
-                  ["key11", "→"], ["key12", "→"], ["key31", "⬜"], ["key32", "🌵"],
-                  ["key33", "⬥"], ["key36", "❎"]];
+  const onKeys = [["key5", "left"], ["key7", "left"], ["key8", "up"], ["key10", "up"], ["key9", "down"],
+                  ["key11", "right"], ["key12", "right"], ["key32", "pause"],
+                  ["key33", "o"], ["key36", "x"]];
   for (const one of onKeys) {
     const el = elements[one[0]];
-    if (!el || el.innerHTML !== "<i>" + one[1] + "</i>") wrong.push(one[0] + " prints " + JSON.stringify(el && el.innerHTML));
+    if (!el || iconOf(el) !== one[1]) wrong.push(one[0] + " prints " + JSON.stringify(el && el.innerHTML));
   }
-  check("the keybed keys pv_gamepad() reads carry the same eight controls", wrong.length === 0, wrong.join("; "));
+  check("the keybed keys pv_gamepad() reads carry the same seven controls", wrong.length === 0, wrong.join("; "));
 
   // A cart cannot read the rest of the panel, so the rest of it carries nothing: no pad numbers,
   // no KB/P/H/C letters, no glyph on a key that does nothing.

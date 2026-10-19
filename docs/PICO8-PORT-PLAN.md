@@ -193,14 +193,20 @@ Upstream quirk worth knowing, not used by us: `femto8/tools/png_to_p8.c`
 segfaults on our exported `.p8.png` (it pins `m_lua_script`/`m_file_buffer` to
 NULL); the parser we depend on handles the same file correctly.
 
-### Open hardware question (measure, do not assume)
+### Hardware question: display throughput (addressed 2026-10-19, real-device check pending)
 
 The panel is driven over SPI: a full 240x240 RGB565 frame is 115 KB, so frame
 rate is transfer-bound. GameDude ran the panel at ~10 updates/s while emulating
-at ~60 fps (its own trial doc). PICO-8 carts expect 30/60 fps visuals, so the
-port must either raise the LCD baud, send only changed rows, or accept a lower
-refresh with the emulator running at full speed. This is a measurement on the
-unit, not a decision to guess now.
+at ~60 fps (its own trial doc). The first picovave path made this worse by
+opening an address window for every one of the 240 rows.
+
+The device path now opens **one** window per frame, keeps CS low and streams
+the rows back to back. `LCD_BAUD` moved from `4` (~12 MHz, a 76.8 ms transfer)
+to `1` (~30 MHz, a 30.7 ms transfer). `p8_render()` also uses 16-entry palette
+lookup tables and skips the 128x128 overlay composite unless the I/O icon is
+visible. That raises the transfer-only ceiling from ~13 fps to ~30 fps; if the
+panel shows artefacts at 30 MHz, `LCD_BAUD 2` (~20 MHz) is the fallback. The
+remaining measurement is on the unit (see `docs/HANDOVER.md` §15).
 
 ## 8. Reference: the original PICO-8 0.2.7, mined locally (2026-10-14)
 
@@ -650,7 +656,7 @@ which is patch #7. Both bugs are exactly the kind a "one cart per process" test 
 
 **Measured limit — and the reclaim that answered it (2026-10-17).** The format works end to end, but
 the device's memory is the real gate, so it was measured rather than assumed. The pool is 294,912 B
-(minus a 1,024 B red zone; 304,824 / 303,800 B on 2026-10-18 §12, **414,184 / 413,160 B after §13**) and
+(minus a 1,024 B red zone; 304,824 / 303,800 B on 2026-10-18 §12, **414,936 / 413,912 B after §13**) and
 the engine used to hold **156,416 B** of it for the whole time a cart
 ran: a 64 KiB PICO-8 address space, a **17,152 B copy of the cartridge ROM**, an 8 KiB overlay
 screen, and a **64 KiB Lua source buffer** — plus the Lua state and its ~200 API closures (~44 KB).
@@ -684,7 +690,7 @@ rounded to 8, on *every* block — and a cart is thousands of small Lua blocks, 
 rounding detail. The wasm is 32-bit like the device; a 64-bit host overstates the same carts by ~2×,
 because Lua is pointer-heavy. 300 frames (10 s of cart time), one cart per **fresh** instance
 (an empty store, so the baseline is the engine's own footprint), against the device's 303,800 B
-(2026-10-18; it was 293,888 B — §12 of `docs/HANDOVER.md`; §13 then made it 413,160 B):
+(2026-10-18; it was 293,888 B — §12 of `docs/HANDOVER.md`; §13 then made it 413,912 B):
 
 | cart | measured peak | vs the pool |
 |---|---|---|
@@ -704,7 +710,7 @@ and host previews have megabytes and run all five. Squeezing modestly more (a sm
 smaller source buffer, freeing between uploads) can win tens of KB — not the ~1 MB baba needs.
 
 > **§13 update (2026-10-18, second reclaim).** The peaks above are the *cost model* against the
-> 303,800 B pool of that moment. The pool is **413,160 B** now, and the default wasm links the
+> 303,800 B pool of that moment. The pool is **413,912 B** now, and the default wasm links the
 > device's own allocator, so the verdict is a MEASUREMENT in the device's arena: `baba` (45 KB
 > script, 402 KB peak, 5 refusals in 300 frames) **runs** on the device; `loop-4` and `flipside`
 > run with 0 refusals; `fighter`/`terra` run but hitch badly; `bunnysurvivor` still fails to load

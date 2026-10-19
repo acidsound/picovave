@@ -1,6 +1,6 @@
 # vavemod — SMK-37 Pro 커스텀 펌웨어 (picovave)
 
-> **상태: PICO-8(femto8) 이식 — 기기·시뮬레이터·호스트가 같은 엔진을 돌린다, 2026-10-17.**
+> **상태: PICO-8(femto8) 이식 — 기기·시뮬레이터·호스트가 같은 엔진을 돌린다, 2026-10-19.**
 > 플랫폼(`platform/`: HAL · 부팅 · USB/OTA · 복구 · 메모리맵 · 로더 · 패커)은 Makkuro37에서
 > vendor한 그대로이고, **앱 계층이 이제 PICO-8이다.** 공유 앱 [src/picovave_p8.h](src/picovave_p8.h)가
 > vendored femto8 엔진을 프레임 단위(`p8_begin`/`p8_step`, 카트의 `reset()`/`run()`은 프레임마다
@@ -8,8 +8,8 @@
 > SysEx(`F0 22 24 35 7E ..`)로 **`.p8.png` 카트를 업로드**한다 — 카트 형식은 **`.p8.png` 하나뿐**이다
 > (텍스트 `.p8`은 받지 않는다). 이미지는 **브라우저가 풀고**(`web/sim/p8png.mjs`) 기기는 그 안의
 > 코드 섹션만 편다(femto8의 PXA/`:c:`/raw 해제기) — 기기에서 PNG를 해독하려면 RGBA 131,200 B가
-> 필요했고, 그때 기기의 Lua 힙은 22,016 B였다. 지금 기기가 엔진·Lua에 주는 아레나는 **414,184 B**
-> (Lua 힙 **413,160 B** = 아레나 − red zone 1,024)이고, **카트가 도는 동안 엔진이 붙잡는 몫은 73,728 B**
+> 필요했고, 그때 기기의 Lua 힙은 22,016 B였다. 지금 기기가 엔진·Lua에 주는 아레나는 **414,936 B**
+> (Lua 힙 **413,912 B** = 아레나 − red zone 1,024)이고, **카트가 도는 동안 엔진이 붙잡는 몫은 73,728 B**
 > (64K PICO-8 주소 공간 + 8K 오버레이)뿐이다: 카트 롬은 카트 자체(스토어)에서 읽고, Lua 소스 버퍼는
 > 로딩 중에만 살아 있으며 **카트의 스크립트 크기만큼만** 잡는다(패치 8·9·10). 그래서 **풀의 거의 전부가
 > Lua**인데, Lua가 얼마나 필요한지는 소스 크기로 알 수 없다(10~20배) — 시뮬레이터의 wasm이 **기기와
@@ -20,7 +20,9 @@
 > 396 KB(99회, 눈에 띄게 끊김) · terra 379 KB(12만회, 실행은 되지만 사실상 못 씀) · bunnysurvivor는
 > 로드 실패 → 기기가 **기본 카트로 폴백**하고 멈추지 않는다. (시뮬레이터/호스트 프리뷰는 메모리가 커서
 > 5개 전부 실행된다.) 기기 펌웨어 · wasm 시뮬레이터 · 호스트 프리뷰가 **같은 엔진과 같은 앱 계층**을
-> 컴파일하고, 그 화면은 픽셀 단위로 일치한다. Game Boy 경로(peanut-gb 등)는 쓰지 않는다.
+> 컴파일하고, 그 화면은 픽셀 단위로 일치한다. 표시 경로는 프레임당 LCD 주소 창 1개 + 30 MHz SPI로
+> 스트리밍하고(전송 ~31 ms), 팔레트 LUT와 오버레이 스킵으로 엔진 쪽 비용도 줄였다 — 상단 FPS 숫자는
+> 실제 주사율과 달라 제거했다(`docs/HANDOVER.md` §15). Game Boy 경로(peanut-gb 등)는 쓰지 않는다.
 
 M-Vave SMK-37 Pro(AC791N)용 커스텀 펌웨어 패키지 형식을 역설계하고,
 **PICO-8(femto8) 카트를 실행하는, 입력(18 버튼 · 8 엔코더 · 37 건반 · 16 패드 · 4 페이더 ·
@@ -44,6 +46,7 @@ M-Vave SMK-37 Pro(AC791N)용 커스텀 펌웨어 패키지 형식을 역설계�
 - 구조 분석 전문: [docs/REVERSE_ENGINEERING.md](docs/REVERSE_ENGINEERING.md)
 - 산출물: [build/picovave.fwsc](build/picovave.fwsc)
 - 시뮬레이터: [build/sim/index.html](build/sim/index.html) — `python3 -m http.server -d build/sim 8738`
+  (페이지 상단의 **한국어 / EN** 버튼으로 언어를 바꾼다. 선택은 브라우저에 기억된다.)
 
 ## 하나의 소스, 세 개의 소비자
 
@@ -104,7 +107,7 @@ PICO-8의 저장 그 자체다).
 펌웨어 설치만 하고 카트 명령이 없다 — 실기 카트는 페이지의 FLASH(USB)로 넣는다.
 
 **기기가 못 돌리는 카트는 거부되고, 기기는 멈추지 않는다.** 카트의 Lua 비용은 소스 크기의 10~20배에
-런타임 데이터(테이블·문자열)가 더해지는데, 기기 아레나는 414,184 B(Lua 힙 413,160 B = 아레나 − 1 KiB
+런타임 데이터(테이블·문자열)가 더해지는데, 기기 아레나는 414,936 B(Lua 힙 413,912 B = 아레나 − 1 KiB
 red zone)이고 그중 엔진이 ~74 KB를 쓴다. 그래서 **크기로는 예측할 수 없다** — 45 KB 스크립트(baba)가
 겨우 돌고, 20 KB 스크립트도 문자열/테이블이 많으면 못 돈다. 유일한 판정은 **실측**이다:
 
@@ -222,7 +225,7 @@ macOS에서는 JieLi 툴체인 명령도 linux/amd64 Docker 컨테이너에서 �
 | [picovave/sim/fwsc_check.mjs](picovave/sim/fwsc_check.mjs) | `fwsc.mjs` ↔ `fwsc.py` 교차검증 러너 |
 | [picovave/sim/fm1ota_check.mjs](picovave/sim/fm1ota_check.mjs) | `fm1ota.mjs` ↔ `picovave/platform/tools/fm1_install.py` 교차검증 + 가짜 기기 전체 업데이트 |
 | [picovave/host/preview.c](picovave/host/preview.c) + [seam_host.c](picovave/host/seam_host.c) | 호스트 프리뷰: 같은 엔진·앱 계층 + 캡처 HAL/스크립트 입력 (wasm과 픽셀 일치) |
-| [picovave/host/alloc_test.c](picovave/host/alloc_test.c) | **기기 allocator 단위/스트레스 테스트** — `femto8/stub/device/alloc.c`를 기기와 같은 414,184 B 아레나로 돌린다(시뮬레이터·프리뷰는 다른 allocator를 쓰므로 이 파일만이 그 코드를 실행한다). `verify_final.py`가 매번 돌린다 |
+| [picovave/host/alloc_test.c](picovave/host/alloc_test.c) | **기기 allocator 단위/스트레스 테스트** — `femto8/stub/device/alloc.c`를 기기와 같은 414,936 B 아레나로 돌린다(시뮬레이터·프리뷰는 다른 allocator를 쓰므로 이 파일만이 그 코드를 실행한다). `verify_final.py`가 매번 돌린다 |
 | [web/sim/index.html](web/sim/index.html) | 시뮬레이터 페이지 (SMK-37 Pro 패널 + DEVICE: SIMULATOR(웹) / FLASH(USB)) · 카트 대상도 같은 구분 |
 | [web/sim/fm1ota.mjs](web/sim/fm1ota.mjs) | Web MIDI SysEx 실기 플래셔 (`picovave/platform/tools/fm1_install.py`와 교차검증) |
 | [web/sim/fwsc.mjs](web/sim/fwsc.mjs) | .fwsc 리더의 브라우저 이식본 (`tools/fwsc.py`와 교차검증) |
