@@ -183,7 +183,9 @@ The simulator page's **DEVICE** box has two branches.
   sources; it cannot run pi32v2 machine code.
 - Restoring is done by dropping or picking a `SMK-37_Pro_016.fwsc` the user **already owns**, and
   applying it to the SIMULATOR (model) or FLASH(USB) (hardware). The stock firmware is copyrighted,
-  so it is not in this repository or on the page.
+  so it is not in this repository or on the page. **This has been done on hardware**: a unit running
+  picovave was restored with the stock v016 package over FLASH(USB) and came back up normally —
+  restore is not a separate code path that could rot while install still works.
 - The page also links the `picovave.fwsc` download.
 
 `web/sim/fwsc.mjs` is a port of `tools/fwsc.py`. A port drifts silently, so `tools/verify_final.py`
