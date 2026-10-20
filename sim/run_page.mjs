@@ -209,8 +209,22 @@ check("page shows a gallery of community carts", cardFiles.length >= 8 &&
 check("every gallery card is a cart the build serves",
       cardFiles.length > 0 && missingCards.length === 0, missingCards.join(", ") || "all served");
 check("every gallery card links to its source thread",
-      (grid.match(/href="https:\/\/www\.lexaloffle\.com\/bbs\/\?pid=\d+"/g) || []).length === cardFiles.length,
-      (grid.match(/lexaloffle\.com\/bbs\/\?pid=/g) || []).length + " links");
+      (grid.match(/href="https:\/\/www\.lexaloffle\.com\/bbs\/\?[pt]id=\d+"/g) || []).length === cardFiles.length,
+      (grid.match(/lexaloffle\.com\/bbs\/\?[pt]id=/g) || []).length + " links");
+// A .p8.png IS the label, so the card's artwork is the cart it sends - no second image to drift.
+const thumbs = (grid.match(/class="cart-thumb" src="\.\/carts\/([^"]+)"/g) || [])
+  .map(function (s) { return s.slice(s.indexOf("./carts/") + 8, -1); });
+check("every gallery card shows the cart's own label image",
+      thumbs.length === cardFiles.length && thumbs.join("|") === cardFiles.join("|"),
+      thumbs.length + " thumbnails");
+// The grid is alphabetical by title, whatever order the list is written in.
+const titles = (grid.match(/class="cart-name">([^<]*)</g) || [])
+  .map(function (s) { return s.slice(18, -1).replace(/&amp;/g, "&"); });
+const sorted = titles.slice().sort(function (a, b) {
+  return a.localeCompare(b, "en", { sensitivity: "base" });
+});
+check("the gallery is alphabetical by cart name",
+      titles.length > 1 && titles.join(" | ") === sorted.join(" | "), titles.join(" · "));
 check("the gallery names the target the cartridge slot panel chose",
       /SIMULATOR/.test((elements["galleryTargetNote"] || {}).innerHTML || ""),
       (elements["galleryTargetNote"] || {}).innerHTML || "");

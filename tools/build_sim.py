@@ -312,8 +312,13 @@ def main():
     # it is baked into the wasm (sim/cart_default.h) from tools/pvcart.py.
     carts_out = a.out / "carts"
     carts_out.mkdir(exist_ok=True)
+    keep = set()
     for p in sorted((SRC / "carts").glob("*.p8.png")):
+        keep.add(p.name)
         shutil.copy(p, carts_out / p.name)
+    for old in carts_out.glob("*.p8.png"):      # a removed cart must not linger in the served tree
+        if old.name not in keep:
+            old.unlink()
 
     # The page's DEVICE box has two halves. SIMULATOR verifies and "flashes" the package into
     # its modelled flash; FLASH(USB) serves it to a real device over SysEx. Both use our own
