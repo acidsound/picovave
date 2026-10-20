@@ -1,0 +1,28 @@
+# Third-party notices
+
+`LICENSE` (MIT) covers the code written for picovave: `src/`, `sim/`, `host/`,
+`web/`, `tools/` and `docs/`. Two vendored trees keep their own terms.
+
+## femto8/
+
+femto8 (bbaker / Chris January), pinned at
+`f9e5097c882d0c9203616689f3de5531e0597c43`. Copyright 2023 Ben Baker, MIT —
+see `femto8/LICENSE` and `femto8/README.picovave.md` for exactly what is kept.
+
+- `femto8/src/lua/` — Lua 5.4, MIT (PUC-Rio).
+- `femto8/src/lodepng/` — LodePNG, zlib. Not linked into the firmware.
+- `femto8/src/lexaloffle/` — the PXA / `:c:` compression snippets, from
+  Lexaloffle's PICO-8. PICO-8 itself is proprietary: this repository does not
+  relicense it, ship a Lexaloffle binary, or include any cartridge it does not
+  own.
+
+## platform/
+
+Makkuro37 / FM-1 platform — **GPL-3.0-only**, Copyright (C) 2026 Leo Kuroshita
+(@kurogedelic), Hügelton Instruments; Makkuro37 (C) 2026 M. Geisler (makkuro).
+Every file carries its own `SPDX-License-Identifier`.
+
+The firmware links this tree, so **the built `picovave.fwsc` is a combined work
+and is GPL-3.0-only**. The MIT above is not a grant for that binary — it covers
+picovave's files on their own. A differently licensed binary would have to be
+settled with the platform authors first.

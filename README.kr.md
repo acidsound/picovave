@@ -259,3 +259,15 @@ macOS에서는 JieLi 툴체인 명령도 linux/amd64 Docker 컨테이너에서 �
   이다. 탈출구는 (a)~(d)의 USB/mask-ROM 경로뿐이다.
 
 비공식 펌웨어이며 설치 책임은 사용자에게 있다.
+
+## 라이선스
+
+picovave가 직접 쓴 코드(`src/`, `sim/`, `host/`, `web/`, `tools/`, `docs/`)는 **MIT**다 —
+[LICENSE](LICENSE). vendor한 두 트리는 아니다:
+
+- `femto8/` — femto8(Ben Baker) MIT, Lua 5.4 MIT, LodePNG zlib(펌웨어에 링크하지 않음). PICO-8 압축
+  스니펫은 Lexaloffle의 것이고 PICO-8 자체는 오픈소스가 아니다.
+- `platform/` — **GPL-3.0-only**(Leo Kuroshita / Hügelton Instruments, Makkuro37 © M. Geisler).
+  펌웨어가 이 트리를 링크하므로 빌드 산출물 `picovave.fwsc`는 결합 저작물이며 GPL-3.0-only다.
+
+자세한 것은 [NOTICE](NOTICE).

@@ -278,3 +278,15 @@ toolchain commands run inside a linux/amd64 Docker container as well.
   and its MIDI is **USB-MIDI only**. The escape routes are the USB/mask-ROM paths (a)–(d).
 
 This is unofficial firmware; installing it is your responsibility.
+
+## License
+
+picovave's own code (`src/`, `sim/`, `host/`, `web/`, `tools/`, `docs/`) is **MIT** — see
+[LICENSE](LICENSE). Two vendored trees are not:
+
+- `femto8/` — femto8 (Ben Baker), MIT; Lua 5.4, MIT; LodePNG, zlib (not linked into the firmware).
+  The PICO-8 compression snippets are Lexaloffle's, and PICO-8 itself is not open source.
+- `platform/` — **GPL-3.0-only** (Leo Kuroshita / Hügelton Instruments; Makkuro37 (C) M. Geisler).
+  The firmware links it, so the built `picovave.fwsc` is a combined work and is GPL-3.0-only.
+
+Details: [NOTICE](NOTICE).
