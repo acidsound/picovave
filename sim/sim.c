@@ -152,6 +152,19 @@ EXPORT void sim_frame(void)
 EXPORT uint16_t *sim_fb(void) { return p8_panel_fb; }
 EXPORT uint32_t sim_draws(void) { return p8_panel_draws; }
 EXPORT uint32_t sim_bytes(void) { return p8_panel_bytes; }
+/* The dirty-row mask the engine produced for the frame just rendered (femto8/src/p8_emu.c,
+ * patch 11): 240 bytes indexed by PANEL row, 1 = that row changed and a streaming target would
+ * send it. sim_panel_rows() is how many are set.
+ *
+ * Why the page and the tests can see it at all: the mask is the one thing between the engine and
+ * the panel push that no pixel comparison can check - a mask that marks too little leaves a stale
+ * row on a real panel while the framebuffer (which the wasm always renders in full) looks perfect.
+ * Exposing it lets tools/frame_budget.mjs measure the mask against the framebuffer it came from,
+ * so a false CLEAN is caught here rather than on the hardware. The wasm and the host preview take
+ * the engine's weak gdi_display_update_dirty() and still expand all 240 rows, so p8_panel_bytes
+ * keeps meaning "a whole frame per push" on those targets. */
+EXPORT uint32_t sim_panel_rows(void) { return p8_panel_dirty_rows; }
+EXPORT uint8_t *sim_panel_mask(void) { return (uint8_t *)p8_panel_dirty_mask(); }
 EXPORT uint32_t sim_boots(void) { return picovave_boots; }
 EXPORT uint32_t sim_wdt(void) { return sim_dev_wdt; }
 EXPORT uint32_t sim_ms(void) { return picovave_boots * (1000u / 30u); }

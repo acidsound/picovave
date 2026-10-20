@@ -58,8 +58,8 @@ CFLAGS = ["-Os", "-ffunction-sections", "-fno-builtin", "-Wall", "-Wno-unused-fu
           "-Wno-macro-redefined"]
 LINE = re.compile(r"^\s*([0-9a-f]+):\s+((?:[0-9a-f]{2} )+)\s*\t(.*)$")
 ROM_LO, ROM_HI = 0xFFC00000, 0xFFD00000       # the chip's mask ROM: nothing may call or load it
-RAM_ORIGIN = 0x01C01400                       # app.ld: start of the RAM region (RAMTEXT ends here)
-RAM_LEN = 0x72C00                             # app.ld: .data/.bss AND the Lua heap, one region
+RAM_ORIGIN = 0x01C00E00                       # app.ld: start of the RAM region (RAMTEXT ends here)
+RAM_LEN = 0x73200                             # app.ld: .data/.bss AND the Lua heap, one region
 # The engine's boot buffers (p8_emu.c). Upstream allocates m_memory, m_cart_memory,
 # m_overlay_memory, m_lua_script plus the file/text-parse scratch (m_file_buffer,
 # m_decompression_buffer, m_temp_cart_memory, m_temp_lua_script); picovave's cooked-cart-only patch

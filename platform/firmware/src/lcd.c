@@ -101,12 +101,23 @@ static void lcd_blit(uint32_t x, uint32_t y, uint32_t w, uint32_t h, const uint1
     lcd_data(px, w * h * 2u);
 }
 
-/* ---- whole-frame stream -------------------------------------------------------------
+/* ---- row stream --------------------------------------------------------------------
  * lcd_blit() sets the address window for every call, which for a 240-row panel is 240 windows
  * (three commands and two short data transfers each) plus a sync before every one of them.
- * A frame has one window: set it once, then keep CS low and feed rows back to back. The caller
+ * A stream is one window: set it once, then keep CS low and feed rows back to back. The caller
  * must wait for a row before overwriting its buffer (lcd_stream_wait), and end the stream so CS
- * goes high on the final row (lcd_stream_end). */
+ * goes high on the final row (lcd_stream_end).
+ *
+ * The window does not have to be the whole panel. A frame that only repaints some panel rows
+ * opens ONE window per run of consecutive dirty rows - lcd_stream_begin(0, y0, 240, rows) - and
+ * streams just those rows (src/picovave.c pv_push_dirty). What a window costs is the 0x2A/0x2B/
+ * 0x2C sequence plus the syncs around it: 11 bytes on the wire (~3 us at 30 MHz) and a handful
+ * of register polls, against 128 us for the 480 B of one 240-pixel row. So a window is worth
+ * opening even for a single row, but a window PER row is not: 240 of them is the shape §15
+ * removed - 240 sync round trips and ~0.7 ms of command bytes, paid before a single pixel.
+ * Measured runs of dirty rows per frame on the gallery carts: 3.3 worst case (OMEGA ZONE), 14.3
+ * (Celeste), 7.2 (loop-4), 0.4 (steps), so a per-run window stays far from that edge: 14.3
+ * windows cost ~0.15% of the frame's row bytes. */
 static void lcd_stream_begin(uint32_t x, uint32_t y, uint32_t w, uint32_t h)
 {
     lcd_window(x, y, x + w - 1u, y + h - 1u);

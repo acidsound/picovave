@@ -132,3 +132,41 @@ these do not surface there.
     helpers **moved out of the `#ifdef SDL` block** - nothing in them is SDL-specific, they only
     read `m_memory` - so all three consumers (device, wasm simulator, host preview) render a cart
     identically; that is what `tools/verify_final.py`'s pixel parity compares.
+11. `src/p8_emu.c` `p8_render()` (**the `__DA1470x__` branch**): **per-frame dirty rows**, and a new
+    seam entry point `gdi_display_update_dirty()` (`seam/gdi.h`) that says which PANEL rows (0..239)
+    changed. The board pushes a frame over 30 MHz SPI, so a full 240x240 panel is 115,200 B =
+    **30.72 ms** of the 33.3 ms a 30 fps frame has - 92% of the budget, spent whether or not the
+    cart moved. Measured on the eight gallery carts (`tools/frame_budget.mjs`), the median rows per
+    frame run from **0** (baba, clockwise, steps idle) to **227** (OMEGA ZONE idle); typical moving
+    carts are bownmobs **4**, carrot **13-16**, loop-4 **14-25**, Celeste **57-110**. So the engine
+    now tells the target what to skip.
+    How, without a previous-frame buffer: `.bss` is Lua heap on this board (`app.ld` puts `.pool`
+    right behind it), so a 32,768 B copy of the last screen would cost the 45 KB carts. Instead each
+    **source** row (the 128 rows of PICO-8's screen) is hashed with FNV-1a-32 *as it is written* -
+    the render loop is already touching every pixel, so this is one multiply-xor per pixel and no
+    second pass over 16,384 pixels - and compared with the same row's hash from the previous frame.
+    Cost, measured on the object rather than counted by hand: **760 B** of `.bss` (512 B of hashes +
+    240 B of mask + the four flags, with padding) plus **4 B** of `.common` for the row count -
+    **764 B** in all, against the ~16 KB of headroom the arena has.
+    The mask is indexed by **panel** row, the unit the target's push is in: source row `s` feeds
+    panel rows `[s*240/128, (s+1)*240/128)` - the exact rows `gdi_expand_row()` reads from it - and
+    a dirty source row marks all of them. It is a **superset**, never a subset: a false "dirty" only
+    costs SPI time, a false "clean" is a stale row on the panel. So every frame also marks all 240
+    rows when the hashes cannot be trusted: the first frame after a (re)start (`p8_common_reset_cart()`
+    - a boot, a `reset()`/`run()` longjmp, a USB upload), a screen-transform or high-colour-mode
+    change (they change the pixels, not the screen bytes the hash sees), and any frame the I/O-icon
+    overlay composite runs - plus the frame after it, which is when `p8_show_io_icon(false)` erases
+    the icon. That last one is why the overlay path is unchanged: it still composites all 128 rows,
+    it just costs a full panel frame while a cart touches `cartdata()`, which is rare and correct.
+    The seam ships a **weak** `gdi_display_update_dirty()` that just calls
+    `gdi_display_update_async()`, so `seam_sim.c` and `host/seam_host.c` needed no change: they
+    still expand all 240 rows and their `p8_panel_bytes` still means "115,200 B per push", because
+    that is what they really do. The board defines the symbol itself (`src/picovave.c`) and its
+    definition wins at link time; a target that does not define it keeps the full-repaint behaviour
+    by construction.
+    The durable measurement is `tools/frame_budget.mjs` (gallery carts, idle and scripted input):
+    the mean panel transfer falls from **35.1 ms to 5.0 ms** (90.4% of the 33.33 ms 30 fps budget
+    reclaimed), every measured row fits, and the mask is a superset of the pixels that changed on
+    all 1,284 frames it was checked on (`loop-4`'s `_update60` two-push ticks are oracle-only).
+    The hashes and mask cost **764 B** of `.bss`; `app.ld` trims the unused tail of `.ram_text`
+    (0x1400 -> 0x0E00) to pay for it, so the device arena grows to 415,696 B rather than shrinking.

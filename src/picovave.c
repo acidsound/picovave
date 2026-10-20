@@ -78,35 +78,97 @@ extern uint32_t p8_panel_draws, p8_panel_bytes;    /* ...and this file */
 
 static uint8_t panel_up;                 /* lcd_init() ran: the panel, and so a crash screen, is safe */
 
-/* One panel frame, 240 rows at a time: expand a row of the engine's screen (or of a screen
- * picovave drew into it), byte-swap it for the ST7789 and stream it into the one address window
- * this frame opened. The row is the only frame-sized buffer in the app: 480 B, against the
+/* One panel row at a time: expand a row of the engine's screen (or of a screen picovave drew
+ * into it), byte-swap it for the ST7789 and stream it into the address window the current run of
+ * dirty rows opened. The row is the only frame-sized buffer in the app: 480 B, against the
  * 115,200 B of .bss a 240x240 canvas used to cost - and .bss is Lua heap here (app.ld puts .pool
- * right behind it). */
+ * right behind it). A previous-frame buffer is NOT an option for the same reason: 57,600 B would
+ * come straight out of the arena baba_demake-9 (45 KB cart) already sits 4 KB under the ceiling
+ * of, which is why the engine hands over a 240-byte row mask instead (femto8/src/p8_emu.c). */
 static uint16_t pv_row[GDI_OUT_W];
 static uint8_t pv_row_sx[GDI_OUT_W];        /* pv_sx is the SysEx buffer further down */
 static uint8_t pv_row_sx_ready;
 
-static void pv_push(void)
+/* Copy one PANEL row y of the engine's 128x128 screen into pv_row, expanded to 240 pixels and
+ * byte-swapped for the ST7789, ready for lcd_stream_row(). */
+static void pv_row_load(int y)
 {
-    int y, x;
+    int x;
+    gdi_expand_row(p8_screen_fb, pv_row_sx, y, pv_row);
+    for (x = 0; x < GDI_OUT_W; x++) {
+        uint16_t v = pv_row[x];
+        pv_row[x] = (uint16_t)((v >> 8) | (v << 8));
+    }
+}
+
+/* Push the panel rows row_dirty[] marks, and only those. row_dirty is indexed by PANEL row
+ * 0..GDI_OUT_H-1 (gdi.h's GDI_OUT_H, not the engine's 128 source rows); 1 = repaint that row,
+ * 0 = leave the panel showing what it already has. NULL means "every row", which is what makes
+ * pv_push() below exactly "all 240 rows dirty".
+ *
+ * Why this is the whole point of the change: a full 240x240 RGB565 frame is 115,200 B, 30.7 ms
+ * of SPI at 30 MHz (lcd.c LCD_BAUD 1) against a 33.33 ms budget at 30 fps - the transfer IS the
+ * budget. The gallery carts repaint between 0 and 227 of the 240 rows per frame (median,
+ * idle/input; tools/frame_budget.mjs): OMEGA ZONE idle is the 227-row case at 29.2 ms, while most
+ * rows are far below that. Across the measured gallery the mean panel transfer falls from 35.13 ms
+ * to 5.00 ms - 90.4% of the 33.33 ms budget - and the engine's own CPU cost (0.06-1.2 ms on the
+ * wasm gallery) is not the thing to optimise.
+ *
+ * Consecutive dirty rows share ONE address window. The command cost is what makes or breaks this:
+ * a window is the 0x2A/0x2B/0x2C sequence plus the syncs around it, ~11 bytes on the wire but
+ * several register polls, while a row is 480 B (128 us). Per-frame runs of dirty rows are 3.3
+ * worst case (OMEGA ZONE), 14.3 (Celeste), 7.2 (loop-4), 3.0 (carrot), 0.4 (steps) - so a window
+ * per run is cheap and a window per row (the shape §15 removed: 240 windows, 240 sync round
+ * trips and ~0.7 ms of command bytes before any pixel) is what this must not go back to. Even
+ * Celeste's 14.3 runs a frame pay ~0.15% of that frame's row bytes in commands.
+ *
+ * A run is sent top-to-bottom inside its window, so the panel's write pointer only ever advances
+ * the way the ST7789 expects; nothing is read back and no frame-sized state is kept. */
+static void pv_push_dirty(const uint8_t *row_dirty)
+{
+    int y, i, start, end;
+    uint32_t rows = 0u, windows = 0u;
+
+    if (!panel_up)
+        return;                        /* the USB rescue runs headless: no panel to talk to */
     if (!pv_row_sx_ready) {
         gdi_sx_init(pv_row_sx);
         pv_row_sx_ready = 1;
     }
-    lcd_stream_begin(0u, 0u, GDI_OUT_W, GDI_OUT_H);
-    for (y = 0; y < GDI_OUT_H; y++) {
-        lcd_stream_wait();              /* the previous row is still on the wire */
-        gdi_expand_row(p8_screen_fb, pv_row_sx, y, pv_row);
-        for (x = 0; x < GDI_OUT_W; x++) {
-            uint16_t v = pv_row[x];
-            pv_row[x] = (uint16_t)((v >> 8) | (v << 8));
+    y = 0;
+    while (y < GDI_OUT_H) {
+        if (row_dirty && !row_dirty[y]) {
+            y++;                       /* clean: the panel already shows this row */
+            continue;
         }
-        lcd_stream_row(pv_row, GDI_OUT_W);
+        start = y;
+        while (y + 1 < GDI_OUT_H && (!row_dirty || row_dirty[y + 1]))
+            y++;                       /* grow the run to its last consecutive dirty row */
+        end = y;
+        /* One address window per run: the command overhead is paid once per run, not per row. */
+        lcd_stream_begin(0u, (uint32_t)start, GDI_OUT_W, (uint32_t)(end - start + 1));
+        for (i = start; i <= end; i++) {
+            lcd_stream_wait();         /* the previous row is still on the wire */
+            pv_row_load(i);
+            lcd_stream_row(pv_row, GDI_OUT_W);
+        }
+        lcd_stream_end();              /* wait for the run's last row, then raise CS */
+        rows += (uint32_t)(end - start + 1);
+        windows++;
+        y = end + 1;
     }
-    lcd_stream_end();
+    /* p8_panel_draws is the number of pushes (frame boundaries that reached the panel), so a
+     * cart whose screen did not change still counts a frame. p8_panel_bytes is what actually
+     * went out on the wire: the rows that were sent, plus the 11 command bytes of each window
+     * (0x2A + 4, 0x2B + 4, 0x2C) - it used to be a flat 115,200, which is exactly the number
+     * this change exists to stop paying. */
     p8_panel_draws++;
-    p8_panel_bytes += (uint32_t)GDI_OUT_W * GDI_OUT_H * 2u;
+    p8_panel_bytes += rows * (uint32_t)GDI_OUT_W * 2u + windows * 11u;
+}
+
+static void pv_push(void)
+{
+    pv_push_dirty(NULL);               /* full repaint == "all 240 rows dirty" */
 }
 
 /* Guarded: the USB rescue runs headless (no lcd_init), and ota_show() still calls this - the
@@ -318,16 +380,32 @@ static void hh_input_read(hin_t *in)
         in->wheel[i] = fm1_in.wheel[i];
 }
 
-/* ------------------------------------------------ the one femto8 display hook ---
+/* ------------------------------------------------ the two femto8 display hooks ---
  * femto8 has just written its 128x128 screen (seam_device.c, gdi.h) and this is the frame
  * boundary: pv_push() scales and pushes it one row at a time. Same code the boot, crash and
  * rescue screens go through, so what the panel shows and what the host preview captures are
- * produced by one routine (tools/verify_final.py checks that they agree). */
+ * produced by one routine (tools/verify_final.py checks that they agree).
+ *
+ * The dirty variant is the same boundary for a cart frame: row_dirty[] says which PANEL rows
+ * changed since the previous frame and only those are sent (pv_push_dirty). gdi.h declares it
+ * weak, so the simulator (femto8/seam/seam_sim.c) and the host preview (host/seam_host.c), which
+ * do not define it, keep calling gdi_display_update_async() and keep expanding all 240 rows: the
+ * device is the only target that streams, and no other target had to change. The engine never
+ * passes NULL and always passes nrows == GDI_OUT_H. */
 void gdi_display_update_async(void (*cb)(bool complete, void *user_data), void *user_data)
 {
     pv_push();
     if (cb)
         cb(true, user_data);
+}
+
+void gdi_display_update_dirty(const uint8_t *row_dirty, int nrows,
+                              void (*cb)(bool complete, void *user_data), void *user_data)
+{
+    (void)nrows;                       /* GDI_OUT_H; the mask is indexed by panel row, not source row */
+    pv_push_dirty(row_dirty);
+    if (cb)
+        cb(true, user_data);           /* both paths release the engine's draw semaphore */
 }
 
 /* ------------------------------------------------------------ the mixer (ALNK0) ---

@@ -68,7 +68,8 @@ const check = (what, ok, extra = "") => {
 const NAMES = ["sim_init", "sim_frame", "sim_fb", "sim_draws", "sim_ms", "sim_bytes", "sim_boots",
   "sim_wdt", "sim_button", "sim_key", "sim_enc", "sim_pad", "sim_fader", "sim_wheel", "sim_midi",
   "sim_rate", "sim_render", "sim_out_l", "sim_out_r", "sim_pads", "sim_leds",
-  "sim_heap_peak", "sim_heap_used", "sim_heap_refused", "sim_device_alloc", "sim_cart_running"];
+  "sim_heap_peak", "sim_heap_used", "sim_heap_refused", "sim_device_alloc", "sim_cart_running",
+  "sim_panel_rows", "sim_panel_mask"];
 check("exports the simulator contract", NAMES.every((n) => typeof ex[n] === "function"),
   NAMES.filter((n) => typeof ex[n] !== "function").join(",") || "");
 
@@ -135,10 +136,10 @@ import { cartPayload, cookedFromScript, CART_LEN, COOKED_SIZE, COOKED_MAGIC } fr
 import { compileCart } from "./luabc.mjs";
 
 // The device's whole heap for the engine and Lua: app.ld's arena (the RAM region from the end of
-// .bss to the stack guard, 414,184 B) less the allocator's 1 KiB red zone - the number
+// .bss to the stack guard, 415,696 B) less the allocator's 1 KiB red zone - the number
 // tools/build_picovave.py prints. sim_heap_peak() is that same pool measured here by the device's
 // own allocator (sim/device_alloc.c), so the two are directly comparable.
-const DEVICE_HEAP = 414936 - 1024;
+const DEVICE_HEAP = 415696 - 1024;
 
 const cartDir = path.join(path.dirname(wasmPath), "carts");
 let fixtures = [];
@@ -315,7 +316,7 @@ if (fixtures.length) {
   };
   // Which cart is on the panel, in words: a slot, the embedded default cart, or nothing.
   const cartOf = (r) => r < 0 ? (r === -1 ? "embedded" : "nothing") : "slot " + r;
-  // Under --device-alloc the arena is really app.ld's 414,184 B and the allocator really refuses, so
+  // Under --device-alloc the arena is really app.ld's 415,696 B and the allocator really refuses, so
   // the verdict is a fact; over the cost model the peak IS the answer (nothing can refuse there).
   const fit = (peak, refused) =>
     Math.round(peak / 1024) + " KB of " + Math.round(DEVICE_HEAP / 1024) + " KB" +
@@ -411,7 +412,7 @@ if (fixtures.length) {
   // ...and the headline claim of the memory round (docs/HANDOVER.md §13): the 45 KB cart that used
   // to leave the panel on the boot screen now RUNS inside the device's own arena. It is the cart at
   // the EDGE - the pool refuses the odd allocation and Lua's GC retries - which is exactly why the
-  // arena had to grow to 414,184 B in the first place.
+  // arena had to grow to 415,696 B in the first place.
   const babaIdx = fixtures.findIndex((n) => n.startsWith("baba"));
   if (babaIdx >= 0) {
     const name = fixtures[babaIdx];
@@ -478,6 +479,29 @@ if (fixtures.length) {
   check("the port has no ESC input: pad 12 leaves the running cart alone",
         agedAgain === aged && afterSelect === aged,
         "aged=" + aged + " after pad 12=" + afterSelect);
+
+  // -------------------------------------------------------------------------------------------
+  // The I/O icon overlay, which is the one layer a dirty-row renderer can silently lose, and a
+  // note on where it can actually be observed.
+  //
+  // p8_render() has two passes: the cart's screen, then - only while overlay_visible - the
+  // engine's 8x8 I/O icon composited over the top right. A change that reworks the first pass for
+  // dirty-row tracking and drops the second leaves the icon missing and changes no other pixel, so
+  // no pixel comparison in this suite would notice. It bit this branch once (docs/HANDOVER.md 17).
+  //
+  // A runtime test for it is NOT possible on this port, and that is worth stating rather than
+  // faking: p8_show_io_icon(true) is called only from p8_load()/p8_load_ram()/save()/cstore()/
+  // reload(), each of which pairs it with show_io_icon(false) around a synchronous p8_flip(). The
+  // device never calls p8_load()/p8_load_ram() (it uses p8_load_cooked/p8_load_bytecode), and the
+  // cart-file paths are refused early because p8_init() allocates no temp cart buffers on this
+  // target. So overlay_visible is false in every frame a cart can be observed in, and an assertion
+  // on "the icon is up" would be asserting something unreachable - it would pass or fail for
+  // reasons unrelated to correctness.
+  //
+  // What CAN be pinned down is the invariant that makes the loss impossible: the composite pass
+  // still exists in p8_render() and still consumes the overlay LUT. That is a source-level check,
+  // so it lives with the other source-level checks in tools/verify_final.py, not here. This note
+  // exists so the next person does not "fix" the gap by writing a test whose premise is false.
 }
 
 // ---------------------------------------------------------------------------------------------

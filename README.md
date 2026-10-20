@@ -52,6 +52,27 @@ the packer `platform/tools/fm1pkg_make.py`). What picovave writes itself is the 
 allocator (`femto8/stub/device/`) — so the parts already proven on hardware are not rebuilt. The
 other consumers (simulator, host) swap only a small hh_* HAL and the seam (`femto8/seam/`).
 
+## Display path
+
+The panel is fed over **30 MHz SPI**: a full 240x240 RGB565 frame is 115,200 B = **30.72 ms** of
+the 33.33 ms a 30 fps tick allows. The engine therefore hashes each 128-wide source row **while it
+renders it** (FNV-1a-32 over the RGB565 pixels it just wrote), compares that with the previous
+frame, and hands the target a 240-byte **PANEL-row mask** (`gdi_display_update_dirty()`, patch 11
+in [femto8/README.picovave.md](femto8/README.picovave.md)). The device opens one ST7789 address
+window per **run** of consecutive dirty rows and streams only those
+(`pv_push_dirty()` in [src/picovave.c](src/picovave.c)); boot, crash, OTA and rescue screens still
+repaint the whole panel (`pv_push()` is exactly "all 240 rows dirty"). The mask is a **superset**
+of the rows that changed by construction - a false dirty row only costs SPI time, a false clean row
+would leave a stale row on the panel - so restarts, a screen-transform/high-colour change, and every
+frame that composites the engine's I/O icon mark all 240 rows.
+
+`tools/frame_budget.mjs` is the gate, measured on the eight gallery carts in both idle and scripted
+input: the mean panel transfer falls from **35.1 ms to 5.0 ms** (saving **90.4% of the 33.33 ms 30 fps
+budget**), every measured row fits 30 fps, and the engine's mask is a superset of the pixels that
+changed on every one of the 1,284 frames it was cross-checked on. Its scratch/measurement numbers
+for each cart are in the run output. The 764 B of `.bss` the row hashes and mask cost is paid for by
+trimming the unused tail of the `.ram_text` region (`app.ld`), so the arena **grows** to 415,696 B.
+
 ## Cart (game) upload and execution
 
 The device uses the SLOOP store (flash 0x9D000..0xBB000, 120 KiB) for **one cart** (one slot,
@@ -102,8 +123,8 @@ verifies each card's label, served file, source link and the alphabetical order 
 cart keeps its author's licence, and the source link leads to the original thread.
 
 **A cart the device cannot run is refused, and the device keeps going.** A cart's Lua cost is
-10–20× its source size plus runtime data (tables, strings); the device arena is 414,936 B (Lua heap
-413,912 B = arena − 1 KiB red zone) and the engine uses ~74 KB of it. So **size cannot predict it** —
+10–20× its source size plus runtime data (tables, strings); the device arena is 415,696 B (Lua heap
+414,672 B = arena − 1 KiB red zone) and the engine uses ~74 KB of it. So **size cannot predict it** —
 a 45 KB script (baba) barely runs, and a 20 KB script with many strings/tables does not. The only
 verdict is a **measurement**:
 
@@ -220,7 +241,7 @@ toolchain commands run inside a linux/amd64 Docker container as well.
 | [src/picovave_p8.h](src/picovave_p8.h) | app layer: femto8 boot · frame loop (`p8_begin`/`p8_step`) · per-frame setjmp · input→gamepad — shared by all three consumers |
 | [src/picovave_cart.h](src/picovave_cart.h) | cart store (one slot · CRC16 · `seq`) + SysEx upload protocol — shared by device and simulator |
 | [src/picovave_gfx.h](src/picovave_gfx.h) | **128x128** (PICO-8's own size) RGB565 canvas: the surface the engine draws a cart into, which the device's OTA/recovery/crash screens reuse as the `hg_fb` alias (the panel then scales a line at a time). The engine is compiled with `-DLUAI_MAXCCALLS=48` (stock 200 is 316 B per protected level × 200 ≈ 63 KB, over a 24,320 B stack, so deep carts fault in hardware before Lua's own guard can fire). The build also puts **its own tag** (first 8 hex digits of the sha256 of the build inputs) into the NUL padding of the identity reply, and `ota_probe.py --ask`/`--flash` prints it (the panel holds the last frame, so it cannot prove whether a flash happened). `hg_crash_screen()` draws PC · vector · EMU/DBG · SP verdict · USP/SSP · **stack high-water mark** · crash count · ETM in 12 lines under a `PICOVAVE CRASH` headline, and the record left in `.noinit` makes **the next boot redraw the same screen as `LAST CRASH` for 10 seconds** (you cannot miss it) |
-| [femto8/](femto8/) | vendored PICO-8 (femto8) engine — **10 documented patches** only ([femto8/README.picovave.md](femto8/README.picovave.md)) |
+| [femto8/](femto8/) | vendored PICO-8 (femto8) engine — **11 documented patches** only ([femto8/README.picovave.md](femto8/README.picovave.md)) |
 | [src/picovave.c](src/picovave.c) | device entry point + hh_* HAL + panel push (RGB565 BE swap) + ALNK0/TIMER5 ISRs + USB/OTA/cart glue |
 | [platform/firmware/{hal,src}](platform/firmware/hal) | real-device HAL · panel + USB/OTA + loader (a copy vendored from Makkuro37 — picovave is self-contained) |
 | [sim/sim.c](sim/sim.c) | wasm simulator (includes the app layer, cart and engine; only the HAL is swapped) |
@@ -231,7 +252,7 @@ toolchain commands run inside a linux/amd64 Docker container as well.
 | [sim/fwsc_check.mjs](sim/fwsc_check.mjs) | `fwsc.mjs` ↔ `fwsc.py` cross-check runner |
 | [sim/fm1ota_check.mjs](sim/fm1ota_check.mjs) | `fm1ota.mjs` ↔ `platform/tools/fm1_install.py` cross-check + a full update against a fake device |
 | [host/preview.c](host/preview.c) + [seam_host.c](host/seam_host.c) | host preview: the same engine and app layer + capture HAL/scripted input (pixel-identical to the wasm) |
-| [host/alloc_test.c](host/alloc_test.c) | **unit/stress test for the device allocator** — runs `femto8/stub/device/alloc.c` in the device's own 414,936 B arena (the simulator and preview use another allocator, so this file is the only one that exercises that code). `verify_final.py` runs it every time |
+| [host/alloc_test.c](host/alloc_test.c) | **unit/stress test for the device allocator** — runs `femto8/stub/device/alloc.c` in the device's own 415,696 B arena (the simulator and preview use another allocator, so this file is the only one that exercises that code). `verify_final.py` runs it every time |
 | [web/sim/index.html](web/sim/index.html) | the simulator page (SMK-37 Pro panel + DEVICE: SIMULATOR(web) / FLASH(USB)) · the cart target uses the same split |
 | [web/sim/fm1ota.mjs](web/sim/fm1ota.mjs) | Web MIDI SysEx flasher for hardware (cross-checked against `platform/tools/fm1_install.py`) |
 | [web/sim/fwsc.mjs](web/sim/fwsc.mjs) | browser port of the .fwsc reader (cross-checked against `tools/fwsc.py`) |
@@ -242,6 +263,7 @@ toolchain commands run inside a linux/amd64 Docker container as well.
 | [tools/build_picovave.py](tools/build_picovave.py) | firmware build driver (vendored platform + fm1pkg_make) |
 | [tools/build_sim.py](tools/build_sim.py) | simulator build driver (picovave wasm + page + worklet). `--stack 24320` = device stack; default heap = device allocator (`sim/device_alloc.c`, device arena); `--probe-alloc` = cost model (`sim/heap_probe.c`) |
 | [tools/probe_carts.mjs](tools/probe_carts.mjs) | per-cart measurement tool: peak, refusal count and final slot (fallback or not) on the device allocator. `--sweep` varies the arena size (the basis of the §13 table and the long run) |
+| [tools/frame_budget.mjs](tools/frame_budget.mjs) | **the display-path gate**: runs every gallery cart idle and with scripted input on the wasm, cross-checks the engine's dirty-row mask against the pixels, and requires the measured gallery to reclaim >= 20% of the 33.33 ms 30 fps budget (exit 0/1; `--full-frame` prints the pre-optimisation baseline) |
 | [tools/pvcart.py](tools/pvcart.py) | built-in default cart = **cooked cart** (ROM 0 + raw code section) generator — all three builds bake `cart_default[]` from it |
 | [tools/ota_probe.py](tools/ota_probe.py) | real-device MIDI probe + `--flash PKG` (recovery: runs `fm1_install.py`) |
 | [tools/mido_boot.py](tools/mido_boot.py) | re-exec so it also runs on a python3 without mido (shared by ota_probe and fm1_install) |

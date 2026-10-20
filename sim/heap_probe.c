@@ -2,7 +2,7 @@
 /* heap_probe.c - how much heap a cart needs, measured in the simulator.
  *
  * The device has ONE pool for the engine and Lua (app.ld's arena - .bss's end to the stack guard,
- * 414,184 B - minus the allocator's 1 KiB red zone), so "will this cart run on the SMK-37 Pro?" is
+ * 415,696 B - minus the allocator's 1 KiB red zone), so "will this cart run on the SMK-37 Pro?" is
  * exactly "how high does that pool ever get?" - and the only honest way to answer it is to measure,
  * because a cart's Lua costs 10-20x its source size (a 45 KB script is charged half a megabyte by
  * this probe's cost model) and no static estimate survives a real game.
@@ -104,7 +104,7 @@ void *sim_calloc(size_t n, size_t size)
 #endif
 
 /* The high-water mark since sim_heap_reset(), i.e. what the device's pool would have to hold.
- * Returned as a 32-bit count: the pool is 414,184 B, so anything that reaches 4 GiB is a bug -
+ * Returned as a 32-bit count: the pool is 415,696 B, so anything that reaches 4 GiB is a bug -
  * and an i64 would reach the page as a BigInt, which mixes badly with JS numbers. */
 EXPORT unsigned sim_heap_peak(void) { return (unsigned)probe_peak; }
 EXPORT unsigned sim_heap_used(void) { return (unsigned)probe_used; }

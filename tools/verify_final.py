@@ -856,15 +856,41 @@ def main():
     check("firmware reads pads/faders/wheels from Makkuro37's HAL",
           "fm1_in.pad_press" in fw and "fm1_in.fader" in fw and "fm1_in.wheel" in fw)
     # The panel push. femto8 renders NATIVE RGB565 into p8_screen_fb (PICO-8's own 128x128), and
-    # pv_push() expands ONE row (gdi_expand_row), swaps that row for the ST7789's big endian and
-    # streams it into a single address window - so a whole 240x240 panel frame never exists in
-    # RAM, and the 240 per-row window setups the first version did are gone. That row buffer is
-    # what bought back the 82,432 B the old 240x240 canvas held (docs/HANDOVER.md §13).
+    # pv_row_load() expands ONE row (gdi_expand_row), swaps that row for the ST7789's big endian
+    # and streams it with lcd_stream_row() - so a whole 240x240 panel frame never exists in RAM,
+    # and the 240 per-row window setups the first version did are gone. That row buffer is what
+    # bought back the 82,432 B the old 240x240 canvas held (docs/HANDOVER.md §13).
     check("the device streams the engine's 128x128 screen one row at a time, swapped for the panel",
           "gdi_expand_row(p8_screen_fb" in fw and "(v >> 8) | (v << 8)" in fw
-          and "lcd_stream_begin(0u, 0u, GDI_OUT_W, GDI_OUT_H)" in fw
           and "lcd_stream_row(pv_row, GDI_OUT_W)" in fw
           and "static uint16_t pv_row[" in fw)
+    # ...and only the rows that changed. A full 240x240 frame is 115,200 B = 30.7 ms of the 33.3 ms
+    # a 30 fps frame has (lcd.c LCD_BAUD 1, docs/HANDOVER.md §15), while the gallery carts repaint
+    # between 0 and 227 of the 240 rows per frame (median, idle/input). So the frame boundary takes
+    # a 240-byte PANEL-row mask
+    # (gdi.h: gdi_display_update_dirty) and pv_push_dirty() walks it in RUNS: one address window
+    # per run of consecutive dirty rows (lcd_stream_begin with a y/height, not the whole panel),
+    # clean rows not sent at all. A window per ROW is the shape §15 removed, so the check below
+    # also refuses the old whole-panel window: with a mask, the window's y and height come from
+    # the run.
+    push_dirty = fw[fw.index("static void pv_push_dirty("):]
+    push_dirty = push_dirty[:push_dirty.index("\n}\n")]
+    check("the device pushes only the dirty panel rows, one address window per run",
+          "const uint8_t *row_dirty" in fw
+          and "if (row_dirty && !row_dirty[y])" in push_dirty
+          and "lcd_stream_begin(0u, (uint32_t)start, GDI_OUT_W, (uint32_t)(end - start + 1))"
+              in push_dirty
+          and "for (i = start; i <= end; i++)" in push_dirty
+          and "lcd_stream_begin(0u, 0u, GDI_OUT_W, GDI_OUT_H)" not in fw)
+    # pv_push() is the full repaint (boot / crash / OTA / rescue screens via pv_blit()), and it is
+    # exactly "all 240 rows dirty" - not a second copy of the row loop that could drift.
+    check("a full repaint is the dirty push with no mask",
+          "static void pv_push(void)" in fw and "pv_push_dirty(NULL)" in fw)
+    # p8_panel_bytes must be the bytes that actually went out (rows sent + the 11 command bytes of
+    # each window), not the flat 115,200 it used to add - that constant is the cost this removes.
+    check("p8_panel_bytes counts what was sent, not a flat frame",
+          "p8_panel_bytes += rows * (uint32_t)GDI_OUT_W * 2u + windows * 11u" in fw
+          and "p8_panel_bytes += (uint32_t)GDI_OUT_W * GDI_OUT_H * 2u" not in fw)
     # This one bit the hardware: lcd_stream_row() counted pixels, but the HAL takes bytes. A
     # 240-pixel row then sent 240 bytes (120 pixels) into a 240-column window, so the panel packed
     # two source rows into one - the left half of the screen appeared twice, top-left/top-right.
@@ -874,6 +900,33 @@ def main():
     check("the host preview captures the same seam expansion of the same surface",
           "gdi_display_update_async(0, 0)" in hal_files["preview"]
           and "memcpy(cap, p8_panel_fb" in hal_files["preview"])
+
+    # The I/O icon overlay is the one layer a dirty-row renderer can silently lose: p8_render() has
+    # a second pass that composites m_overlay_memory over the cart's screen while overlay_visible,
+    # and a rewrite of the first pass for row tracking can drop it without changing any other pixel
+    # (it did, on this branch: the composite loop was deleted and nothing caught it, because the
+    # icon is not reachable in a steady-state frame on this port - see the note in sim/sim_test.mjs).
+    # So the invariant is checked at the source: the composite loop must still exist, must still read
+    # the overlay memory, and must still consume the overlay LUT it builds. A dead overlay_lut is the
+    # signature of the exact regression.
+    emu = (SRC / "femto8" / "src" / "p8_emu.c").read_text()
+    # p8_emu.c has TWO p8_render() bodies: the SDL one (#ifdef SDL, first) and the !SDL one the board
+    # and the wasm actually compile (last). Take the LAST definition - anchoring on the first would
+    # check the SDL path and pass while the device path lost the composite, which is exactly the bug
+    # this check exists for.
+    render = emu[emu.rindex("void p8_render()"):]
+    render = render[:render.index("\n}\n")]
+    check("the I/O icon overlay is still composited (the dirty-row pass must not drop it)",
+          "if (overlay_visible)" in render
+          and "m_overlay_memory" in render
+          and "row[x] = overlay_lut[left]" in render
+          and "row[x + 1] = overlay_lut[right]" in render
+          and "OVERLAY_TRANSPARENT_COLOR" in render)
+    # ...and the rows it wrote over must be marked dirty, or a streaming target keeps showing the
+    # cart's own pixels where the icon should be: the hashes were taken BEFORE this pass ran.
+    check("a frame that composites the overlay marks every row dirty",
+          "overlay_visible || p8_panel_overlay_last" in render
+          and "p8_mark_all_rows_dirty()" in render)
 
     # the device is reachable and re-flashable, like Makkuro37: its USB-MIDI + M-UPGRADE stack,
     # the 10 kHz TIMER5 tick that drives it, and the escapes back to the mask-ROM UBOOT.

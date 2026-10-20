@@ -104,6 +104,65 @@ unsigned m_frames = 0;
  * pixels every frame. Cleared by p8_show_io_icon(false). */
 static bool overlay_visible;
 
+/* picovave: which panel rows the target has to repaint this frame - patch 11, and the reason it
+ * is worth 512 B of .bss: the SMK-37 Pro's panel is fed over 30 MHz SPI, so a whole 240x240 frame
+ * is 115,200 B = 30.72 ms of the 33.3 ms a 30 fps frame has. The gallery carts change between 0
+ * and 227 of the 240 panel rows per frame (median, idle/input; tools/frame_budget.mjs), and a row
+ * that did not change does not need to be sent.
+ *
+ * The answer has to be cheap and has to fit .bss, which is Lua heap on this board (app.ld puts
+ * .pool right behind .bss), so there is no previous frame to diff against: 32,768 B would cost
+ * the 45 KB carts. Instead p8_render() hashes each SOURCE row (the 128 rows of PICO-8's screen)
+ * while it writes it - it is already touching every pixel - and compares that hash with the one
+ * it stored last frame. 128 * 4 B = 512 B, and a row that is unchanged produces the same hash
+ * and is not marked. A 32-bit hash of 256 B of pixels can in principle collide, which would leave
+ * a row stale; that is the one failure this design accepts (a full previous-frame compare would
+ * cost 32 KB, and the collision needs the cart to change a row into a different one with the
+ * same FNV-1a-32 value - and the row is re-marked the next time anything in it changes).
+ *
+ * p8_panel_row_dirty[] is the OUTPUT of that, indexed by PANEL row 0..GDI_OUT_H-1, which is the
+ * unit the target's push is in (gdi_display_update_dirty()): source row s is the row that
+ * gdi_expand_row() reads for every panel row y with y*GDI_H/GDI_OUT_H == s, so those are the rows
+ * marked. The masks are supersets by construction: everything that could change the picture
+ * without changing the hashes (a restart, a transform or high-colour change, the overlay
+ * composite) sets p8_panel_dirty_all and the frame marks all 240. */
+#define P8_DIRTY_ROW_HASHES 128           /* P8_HEIGHT: one u32 hash per source row, 512 B */
+static uint32_t m_row_hash[P8_DIRTY_ROW_HASHES];
+static bool     p8_row_hash_valid;        /* a previous frame's hashes exist to compare against */
+static bool     p8_panel_dirty_all = true;/* next frame: mark every row (restart, overlay, ...) */
+static uint8_t  m_dirty_transform;        /* what the hashes were taken under last frame */
+static uint8_t  m_dirty_hc_mode;
+
+#ifndef SDL
+/* The panel-row mask only exists on the target that has a panel: GDI_OUT_H/GDI_H come from
+ * femto8/seam/gdi.h, which the SDL build (the desktop one) does not include at all. The hashes
+ * above are unconditional so p8_render()'s two branches stay the same shape. */
+static uint8_t  p8_panel_row_dirty[GDI_OUT_H];   /* 240 B: the mask the target gets */
+
+/* The count of rows the last p8_render() marked, and the mask itself, for a target or a harness
+ * that wants to check the engine's answer instead of trusting it (the frame-budget tool diffs the
+ * panel and asserts this count is never smaller than the number of rows that really changed).
+ * Both are engine state, not per-target state, so the device, the wasm and the preview all see
+ * the same numbers for the same cart. */
+uint32_t p8_panel_dirty_rows;
+const uint8_t *p8_panel_dirty_mask(void) { return p8_panel_row_dirty; }
+
+/* The fan-out in p8_mark_row_dirty() indexes the panel mask with P8_HEIGHT and GDI_OUT_H, and the
+ * hash array with P8_DIRTY_ROW_HASHES: if a future surface change moves any of those, the mask
+ * would silently mark the wrong rows (a false CLEAN - a stale row on the panel), so make the three
+ * agree at compile time. GDI_W/GDI_H are the seam's surface (femto8/seam/gdi.h), P8_WIDTH/
+ * P8_HEIGHT are PICO-8's screen; they are the same thing here by design. */
+typedef char p8_dirty_rows_size_check[(P8_HEIGHT == GDI_H && P8_DIRTY_ROW_HASHES == P8_HEIGHT &&
+                                       GDI_OUT_H >= P8_HEIGHT) ? 1 : -1];
+
+/* The overlay composite writes OVER the screen rows, so a source row the cart did not touch can
+ * still change while the icon is up. Rather than reason about which rows it covers, any frame
+ * that composites (or the first frame after it stops, which is when the icon is erased) marks
+ * everything: the icon is 8x8 at the top-right and only costs a full frame while it is visible,
+ * and a cart that never touches cartdata never pays for it. */
+static bool p8_panel_overlay_last;
+#endif
+
 p8_clock_t m_start_time;
 
 /* picovave: the frame-driven harness owns this with a per-frame setjmp() (p8_step()),
@@ -805,10 +864,61 @@ void draw_complete(bool underflow, void *user_data)
     xSemaphoreGive(m_drawSemaphore);
 }
 
+/* Which panel rows a SOURCE row feeds. gdi_expand_row() reads source row s(y) = y * GDI_H /
+ * GDI_OUT_H for panel row y, so source row s is behind exactly the panel rows y with
+ * s*128 <= y*240 < (s+1)*128 - i.e. y in [ceil(s*240/128), ceil((s+1)*240/128)). 240 is not a
+ * multiple of 128 (it is 1.875), so 112 source rows feed two panel rows and 16 feed one: this is a
+ * fan-out, not a copy, and the bounds have to be the CEILING ones.
+ *
+ * The floor form ([s*240/128, (s+1)*240/128)) looks equivalent and is not: it misses the second
+ * panel row of 112 of the 128 source rows (s=0 would leave panel row 1 unmarked, s=1 row 3, ...),
+ * which is a false CLEAN - the one direction the contract forbids. Checked exhaustively against the
+ * gdi_expand_row() formula for all 128 source rows; the ceiling form is exact and covers all 240. */
+static void p8_mark_row_dirty(int sy)
+{
+    int y0 = (sy * GDI_OUT_H + P8_HEIGHT - 1) / P8_HEIGHT;
+    int y1 = ((sy + 1) * GDI_OUT_H + P8_HEIGHT - 1) / P8_HEIGHT;
+    int y;
+    if (y1 > GDI_OUT_H)
+        y1 = GDI_OUT_H;
+    for (y = y0; y < y1; y++)
+        p8_panel_row_dirty[y] = 1;
+}
+
+/* Mark every panel row: the conservative answer, for the cases the row hashes cannot see. */
+static void p8_mark_all_rows_dirty(void)
+{
+    int y;
+    for (y = 0; y < GDI_OUT_H; y++)
+        p8_panel_row_dirty[y] = 1;
+}
+
+/* femto8 -> target: "here is what changed". The engine ships a weak definition so that a seam
+ * which expands the whole panel anyway (seam_sim.c, host/seam_host.c) needs no change at all and
+ * keeps meaning "one push = a full 115,200 B frame" - those targets really do send everything, so
+ * their p8_panel_bytes must keep saying so. The board defines gdi_display_update_dirty() itself
+ * (src/picovave.c) and its definition wins at link time; see femto8/seam/gdi.h. */
+__attribute__((weak))
+void gdi_display_update_dirty(const uint8_t *row_dirty, int nrows,
+                              void (*cb)(bool complete, void *user_data), void *user_data)
+{
+    (void)row_dirty;
+    (void)nrows;
+    gdi_display_update_async(cb, user_data);
+}
+
 void p8_render()
 {
+    int y;
+
     if (xSemaphoreTake(m_drawSemaphore, portMAX_DELAY) != pdTRUE)
         return;
+
+    /* Start the frame's mask empty: a row becomes dirty only if this frame's render proves it
+     * changed, or if one of the "cannot trust the hashes" cases below marks everything. */
+    for (y = 0; y < GDI_OUT_H; y++)
+        p8_panel_row_dirty[y] = 0;
+    p8_panel_dirty_rows = 0;
 
     /* picovave: PICO-8's screen, 1:1 into the seam's GDI_W x GDI_H surface (femto8/seam/gdi.h).
      * The 128->240 scale is the SEAM's now, which is what lets the board blit one row at a time
@@ -835,9 +945,26 @@ void p8_render()
         overlay_lut[i] = m_colors[color_index((uint8_t)i)];
     }
 
+    /* Two things make a hash comparison meaningless, and both are one comparison per frame:
+     *   - a transform or a high-colour mode changes what a row's PIXELS are, not the screen bytes
+     *     the hash is taken over, so a cart that flips 0x5f2c between frames would keep the same
+     *     hashes and leave the panel showing the old orientation;
+     *   - the first frame after a (re)start has nothing to compare against, and the target may
+     *     still be holding the previous cart's picture (p8_row_hash_valid, set in p8_begin()).
+     * p8_panel_dirty_all covers restarts; these two are per-frame. */
+    if (!p8_row_hash_valid || transform != m_dirty_transform || hc_mode != m_dirty_hc_mode)
+        p8_panel_dirty_all = true;
+    m_dirty_transform = transform;
+    m_dirty_hc_mode = hc_mode;
+
     for (int y = 0; y < P8_HEIGHT; y++)
     {
         uint16_t *row = output + (y * P8_WIDTH);
+        /* FNV-1a over the row as it is written - the RGB565 the target will actually show, not
+         * the 64 screen bytes behind it - one multiply-xor per pixel. It is the same loop that
+         * writes the row, so the cost is one imul per 2 B stored, and it cannot disagree with what
+         * was drawn the way a second pass over 16,384 pixels could. */
+        uint32_t h = 2166136261u;
 
         if (transform == 0)
         {
@@ -855,6 +982,8 @@ void p8_render()
                                  : screen_lut[left];
                 row[x + 1] = hc_mode ? m_colors[color_index(high_color_resolve(hc_mode, right, x + 1, y))]
                                      : screen_lut[right];
+                h = (h ^ row[x]) * 16777619u;
+                h = (h ^ row[x + 1]) * 16777619u;
             }
         }
         else
@@ -871,8 +1000,17 @@ void p8_render()
                     row[x] = m_colors[color_index(high_color_resolve(hc_mode, pix, sx, sy))];
                 else
                     row[x] = screen_lut[pix];
+                h = (h ^ row[x]) * 16777619u;
             }
         }
+
+        /* Did this row change since the last frame? A row that did not is not marked, and the
+         * target will not send it. p8_panel_dirty_all is the "do not trust the hashes this
+         * frame" flag: it is set on a restart, on a transform/high-colour change, and by the
+         * overlay composite below (which runs after this loop and writes over these rows). */
+        if (p8_panel_dirty_all || !p8_row_hash_valid || h != m_row_hash[y])
+            p8_mark_row_dirty(y);
+        m_row_hash[y] = h;
     }
 
     /* The overlay layer over it, on the same 128x128 grid: the engine draws its I/O icon here
@@ -900,7 +1038,33 @@ void p8_render()
         }
     }
 
-    gdi_display_update_async(draw_complete, NULL);
+    /* ...which the row hashes above cannot see: they were taken BEFORE this pass wrote over those
+     * rows. So any frame that composites marks every row, and so does the one frame after the
+     * overlay goes away (that is the frame in which p8_show_io_icon(false) erased the icon).
+     * The icon is 8x8 at the top right and only exists while a cart touches cartdata, so a cart
+     * that never does pays nothing for this; per-row overlay tracking is not worth its risk. */
+    if (overlay_visible || p8_panel_overlay_last)
+        p8_mark_all_rows_dirty();
+    p8_panel_overlay_last = overlay_visible;
+
+    if (p8_panel_dirty_all) {
+        p8_mark_all_rows_dirty();
+        p8_panel_dirty_all = false;
+    }
+    p8_row_hash_valid = true;
+
+    {
+        int n = 0;
+        for (y = 0; y < GDI_OUT_H; y++)
+            n += p8_panel_row_dirty[y] ? 1 : 0;
+        p8_panel_dirty_rows = (uint32_t)n;
+    }
+
+    /* The frame boundary, with the mask. The board (src/picovave.c) implements
+     * gdi_display_update_dirty() and streams only the runs of rows marked here; the wasm and the
+     * host preview take the engine's weak definition, which is a plain full repaint - so their
+     * p8_panel_bytes keeps meaning "a whole 240x240 frame per push". */
+    gdi_display_update_dirty(p8_panel_row_dirty, GDI_OUT_H, draw_complete, NULL);
 }
 #endif
 
@@ -1047,9 +1211,24 @@ void p8_reset(void)
     m_memory[MEMORY_CURSOR + 1] = cursor_y;
 }
 
+/* A (re)start repaints the whole panel. Two things make the row hashes worthless across one:
+ * the target may still be showing the previous cart's picture, and the hashes were taken under
+ * that cart's palette and screen transform. p8_common_reset_cart() is on every path into a cart
+ * (p8_reset_cart() from p8_begin() and from p8_run(), and p8_new_cart()), which is exactly where
+ * the frame loop's "first frame" begins. */
+static void p8_dirty_invalidate(void)
+{
+    p8_row_hash_valid = false;
+    p8_panel_dirty_all = true;
+#ifndef SDL
+    p8_panel_overlay_last = false;
+#endif
+}
+
 static void p8_common_reset_cart()
 {
     assert(!cart_running);
+    p8_dirty_invalidate();
     p8_close_cartdata();
     lua_shutdown_api();
     lua_load_api();

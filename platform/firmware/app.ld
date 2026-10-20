@@ -2,7 +2,7 @@
  * Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments */
 /* Felucca memory map.
  * Code + constants execute in place from XIP (app.bin offset 0 = 0x02000120).
- * 0x01C00000..0x01C01400 holds .ram_text (code that must run while the flash is
+ * 0x01C00000..0x01C00E00 holds .ram_text (code that must run while the flash is
  * busy: the flash driver; it used to be given 24 KiB and the 20 KiB it never
  * used, plus the 8 KiB "RAM-run debug" reserve after it, are the Lua heap now).
  * RAM  : .data/.bss, then the pool right behind them - ONE region, so the heap
@@ -19,8 +19,8 @@
 MEMORY
 {
     XIP    (rx)  : ORIGIN = 0x02000120, LENGTH = 0x8DFBC
-    RAMTEXT (rwx): ORIGIN = 0x01C00000, LENGTH = 0x1400
-    RAM    (rwx) : ORIGIN = 0x01C01400, LENGTH = 0x72C00
+    RAMTEXT (rwx): ORIGIN = 0x01C00000, LENGTH = 0x0E00
+    RAM    (rwx) : ORIGIN = 0x01C00E00, LENGTH = 0x73200
     NOINIT (rw)  : ORIGIN = 0x01C7C000, LENGTH = 0x3D50
 }
 SECTIONS

@@ -328,6 +328,12 @@ bool p8_open_cartdata(const char *id);
 void p8_pump_events(void);
 int p8_shutdown(void);
 void p8_render();
+/* picovave: the frame's dirty mask (patch 11) - which PANEL rows (0..GDI_OUT_H-1) the target has
+ * to repaint, and how many of them there are. Indexed the way gdi_display_update_dirty() wants it
+ * (femto8/seam/gdi.h). A harness can diff the panel and assert the count is never below the rows
+ * that really changed; the device is the consumer that matters. */
+extern uint32_t p8_panel_dirty_rows;
+const uint8_t *p8_panel_dirty_mask(void);
 void p8_reset_cart(void);
 void p8_reset(void);
 int p8_resolve_relative_path(char *dest_filename, const char *src_filename, size_t dest_size, bool for_cstore);

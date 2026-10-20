@@ -31,7 +31,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define ARENA 414936u                   /* app.ld: [_pool_start,_pool_top), 0x01C0EB28..0x01C74000 */
+#define ARENA 415696u                   /* app.ld: [_pool_start,_pool_top), 0x01C0E830..0x01C74000 */
 #define CANARY 4096u                    /* after the pool: a write here is a bug even if the walk lives */
 
 static uint8_t arena[ARENA + CANARY] __attribute__((aligned(8)));

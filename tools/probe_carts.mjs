@@ -1,8 +1,8 @@
 // Measure every served cart against the device's pool, one fresh instance each - the way the page
 // (web/sim/index.html, measureCart) and sim_test.mjs's probeCart() do it. Prints the peak the
-// device's own allocator served, how much of the arena (414,184 B, sim/device_alloc.c's PV_ARENA)
+// device's own allocator served, how much of the arena (415,696 B, sim/device_alloc.c's PV_ARENA)
 // is left, and whether the pool refused anything / which slot ended up running - i.e. the numbers
-// docs/HANDOVER.md §13 quotes.
+// docs/HANDOVER.md §13/§17 quote.
 //
 // Build the wasm first (tools/build_sim.py's default IS the device allocator):
 //   node tools/probe_carts.mjs [path/to/sim.wasm]        # one pass over carts/
@@ -51,7 +51,7 @@ const pack7 = (d) => {
   return out;
 };
 
-const ARENA = 414184 - 1024;
+const ARENA = 415696 - 1024;
 const cartDir = path.join(path.dirname(wasmPath), "carts");
 const mod = await WebAssembly.compile(bytes);
 

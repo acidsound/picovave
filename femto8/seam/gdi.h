@@ -14,7 +14,9 @@
  * gdi_display_update_async() stays the frame boundary, and stays where the scale happens:
  *   device   (src/picovave.c)           one address window per frame, then 240-pixel rows
  *                                       streamed into it, byte swapped for the ST7789: a whole
- *                                       frame is never in RAM
+ *                                       frame is never in RAM. gdi_display_update_dirty() lets
+ *                                       it open a window per RUN of changed rows and skip the
+ *                                       clean ones entirely (patch 11 of femto8/README.picovave.md)
  *   browser  (femto8/seam/seam_sim.c)   expanded into its own 240x240, which sim_fb() exposes
  *   preview  (host/preview.c)           expanded into its own 240x240 capture, for the PPM
  * so the page, the preview and the ROM still show the same pixels (tools/verify_final.py).
@@ -41,6 +43,24 @@ void  gdi_set_layer_enable(int layer, int enable);
 void  gdi_set_layer_src(int layer, void *src, int w, int h, int fmt);
 void *gdi_get_frame_buffer_addr(int layer);
 void  gdi_display_update_async(void (*cb)(bool complete, void *user_data), void *user_data);
+
+/* The same frame boundary, for a target that can skip panel rows: row_dirty[] is indexed by
+ * PANEL row (0..nrows-1, GDI_OUT_H entries today, 1 = repaint that row, 0 = it is unchanged
+ * since the previous frame), and the mask is a SUPERSET of the rows that really changed - a
+ * false 1 only costs SPI time, a false 0 leaves a stale row on the panel.
+ *
+ * Why it exists: a full 240x240 frame is 115,200 B, 30.72 ms of the 33.3 ms a 30 fps frame has
+ * at 30 MHz SPI, and the gallery carts change between 0 and 227 of the 240 panel rows per frame
+ * (median, idle/input; tools/frame_budget.mjs). The engine (p8_emu.c, patch 11 of
+ * femto8/README.picovave.md) computes the
+ * mask while it renders and hands it over here; the target decides how to spend it.
+ *
+ * The engine ships a weak definition of this that just calls gdi_display_update_async(), so a
+ * seam that expands the whole panel anyway (seam_sim.c, host/seam_host.c) needs no change and
+ * keeps its "one push = 115,200 B" counters. The board defines the symbol itself, and its
+ * definition wins at link time. NULL is not passed: nrows is always GDI_OUT_H. */
+void  gdi_display_update_dirty(const uint8_t *row_dirty, int nrows,
+                               void (*cb)(bool complete, void *user_data), void *user_data);
 
 /* 128 -> 240 nearest neighbour, one destination row per call: sx[] is the 240 source columns
  * (fill it once with gdi_sx_init()), y is the destination row. dst gets GDI_OUT_W pixels. */
