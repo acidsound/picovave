@@ -415,15 +415,22 @@
          border:1px solid var(--line); border-radius:var(--radius-md); overflow:hidden;
          box-shadow:inset 0 1px 0 rgba(255,255,255,.05); }
   .cart-card:focus-within { border-color:var(--p12); }
-  .cart-pick { display:flex; flex-direction:column; gap:4px; flex:1; width:100%;
+  .cart-pick { display:grid; flex:1; width:100%;
+         grid-template-columns:auto minmax(0,1fr);
+         grid-template-rows:auto auto 1fr auto;
+         grid-template-areas:"no no" "thumb name" "thumb by" "thumb go";
+         column-gap:12px; row-gap:3px;
          padding:13px 14px 12px; text-align:left; background:transparent; border:0;
          color:var(--ink); cursor:pointer; }
   .cart-pick:hover { background:rgba(41,173,255,.08); }
-  .cart-no { color:var(--p13); font:700 9px/1 var(--font-mono); letter-spacing:.14em; }
-  .cart-name { font:700 15px/1.25 var(--font-ui); color:var(--ink); overflow-wrap:anywhere; }
-  .cart-by { color:var(--dim); font:11px/1.4 var(--font-mono); overflow-wrap:anywhere; }
-  .cart-go { margin-top:auto; padding-top:10px; color:var(--p12); display:flex; align-items:center;
-         gap:6px; font:700 9px/1 var(--font-mono); letter-spacing:.13em; text-transform:uppercase; }
+  .cart-no { grid-area:no; color:var(--p13); font:700 9px/1 var(--font-mono); letter-spacing:.14em; }
+  .cart-thumb { grid-area:thumb; align-self:start; width:76px; height:auto; aspect-ratio:160/205;
+         border:1px solid var(--line-strong); border-radius:2px; background:var(--well); }
+  .cart-name { grid-area:name; font:700 15px/1.25 var(--font-ui); color:var(--ink); overflow-wrap:anywhere; }
+  .cart-by { grid-area:by; color:var(--dim); font:11px/1.4 var(--font-mono); overflow-wrap:anywhere; }
+  .cart-go { grid-area:go; align-self:end; padding-top:8px; color:var(--p12); display:flex;
+         align-items:center; gap:6px;
+         font:700 9px/1 var(--font-mono); letter-spacing:.13em; text-transform:uppercase; }
   .cart-pick:hover .cart-go { color:var(--p7); }
   .cart-go::after { content:""; flex:1 1 auto; min-width:10px; height:1px;
          background:currentColor; opacity:.55; }
@@ -568,6 +575,7 @@
     .section-desc { font-size:13px; }
     .gallery-grid { grid-template-columns:1fr; gap:10px; }
     .cart-pick { padding:12px; }
+    .cart-thumb { width:92px; }
     .instrument { padding:8px; border-radius:8px; }
     .chassis { padding:10px; border-radius:6px; }
     .blk { grid-template-columns:60px minmax(0,1fr); gap:8px; max-width:none; }
@@ -2503,18 +2511,21 @@ function renderCartTarget() {
  * never send something the drop path would have refused.
  *
  * The files are served from ./carts/ by tools/build_sim.py, which copies
- * picovave/carts/*.p8.png next to the page. Every pid below is the BBS thread that
- * published that cart; it is also where the author states the licence.
+ * picovave/carts/*.p8.png next to the page. A .p8.png IS the cart's label, so the
+ * card can show the artwork it will send without shipping a second image. Every
+ * `src` below is the BBS thread that published the cart; it is also where the
+ * author states the licence. The grid sorts itself by title, so this list does not
+ * have to be.
  * --------------------------------------------------------------------------- */
 const GALLERY = [
-  { file: "clockwise_knight-4.p8.png", title: "Clockwise Knight",    by: "benjamin_soule", pid: 175331 },
-  { file: "loop-4.p8.png",             title: "Loop",                by: "kreyk29",        pid: 109978 },
-  { file: "carrot_kingdom_v7-0.p8.png", title: "Carrot Kingdom!",   by: "shoma",          pid: 189706 },
-  { file: "baba_demake-9.p8.png",      title: "Baba Is You Demake",  by: "ooooggll",       pid: 149645 },
-  { file: "37086.p8.png",              title: "OMEGA ZONE",          by: "kometbomb",      pid: 36863 },
-  { file: "steps-1.p8.png",            title: "Steps",               by: "amidos2006",     pid: 85959 },
-  { file: "28861.p8.png",              title: "PERISHER",            by: "managore",       pid: 28862 },
-  { file: "15133.p8.png",              title: "Celeste",             by: "noel",           pid: 11722 },
+  { file: "baba_demake-9.p8.png",       title: "Baba Is You Demake", by: "ooooggll",       src: "https://www.lexaloffle.com/bbs/?pid=149645" },
+  { file: "bownmobs-0.p8.png",          title: "Bow & Mobs",         by: "jumjuma",        src: "https://www.lexaloffle.com/bbs/?tid=157056" },
+  { file: "carrot_kingdom_v7-0.p8.png", title: "Carrot Kingdom!",    by: "shoma",          src: "https://www.lexaloffle.com/bbs/?pid=189706" },
+  { file: "15133.p8.png",               title: "Celeste",            by: "noel",           src: "https://www.lexaloffle.com/bbs/?pid=11722" },
+  { file: "clockwise_knight-4.p8.png",  title: "Clockwise Knight",   by: "benjamin_soule", src: "https://www.lexaloffle.com/bbs/?pid=175331" },
+  { file: "loop-4.p8.png",              title: "Loop",               by: "kreyk29",        src: "https://www.lexaloffle.com/bbs/?pid=109978" },
+  { file: "37086.p8.png",               title: "OMEGA ZONE",         by: "kometbomb",      src: "https://www.lexaloffle.com/bbs/?pid=36863" },
+  { file: "steps-1.p8.png",             title: "Steps",              by: "amidos2006",     src: "https://www.lexaloffle.com/bbs/?pid=85959" },
 ];
 const esc = (s) => String(s).replace(/[&<>"']/g,
   (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -2522,16 +2533,19 @@ const esc = (s) => String(s).replace(/[&<>"']/g,
 function renderGallery() {
   const grid = $("galleryGrid");
   if (!grid) return;
-  grid.innerHTML = GALLERY.map((c, i) =>
+  const carts = GALLERY.slice().sort((a, b) => a.title.localeCompare(b.title, "en", { sensitivity: "base" }));
+  grid.innerHTML = carts.map((c, i) =>
     '<article class="cart-card" role="listitem">' +
       '<button class="cart-pick" type="button" data-cart="' + esc(c.file) + '"' +
         ' aria-label="' + esc(c.title + " · " + c.by + " · " + t("gallerySend")) + '">' +
         '<span class="cart-no">' + String(i + 1).padStart(2, "0") + "</span>" +
+        '<img class="cart-thumb" src="./carts/' + esc(c.file) + '" alt=""' +
+          ' width="160" height="205" loading="lazy" decoding="async">' +
         '<span class="cart-name">' + esc(c.title) + "</span>" +
         '<span class="cart-by">' + esc(c.by) + "</span>" +
         '<span class="cart-go">' + esc(t("gallerySend")) + "</span>" +
       "</button>" +
-      '<a class="cart-src" href="https://www.lexaloffle.com/bbs/?pid=' + c.pid + '"' +
+      '<a class="cart-src" href="' + esc(c.src) + '"' +
         ' target="_blank" rel="noopener noreferrer">' + ic("out") +
         esc(t("gallerySource")) + " · lexaloffle.com" +
         '<span class="vh"> · ' + esc(c.title) + "</span></a>" +
