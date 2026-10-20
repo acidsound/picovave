@@ -230,6 +230,12 @@ check("the gallery names the target the cartridge slot panel chose",
       (elements["galleryTargetNote"] || {}).innerHTML || "");
 check("the gallery is reachable from the masthead", /href="#gallery"/.test(html) && /id="gallery"/.test(html), "");
 
+// The masthead's one ask: a star on the public repo, labelled and described in both languages.
+check("the masthead offers the repo to star",
+      /id="ghStar"/.test(html) &&
+      /href="https:\/\/github\.com\/acidsound\/picovave"/.test(html) &&
+      /id="ic-github"/.test(html), txt("ghStarSr"));
+
 // The panel presses drive the firmware through the same path the worklet uses.
 try {
   const d0 = txt("draws");

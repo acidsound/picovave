@@ -46,7 +46,8 @@ M-Vave SMK-37 Pro(AC791N)용 커스텀 펌웨어 패키지 형식을 역설계�
 - 구조 분석 전문: [docs/REVERSE_ENGINEERING.md](docs/REVERSE_ENGINEERING.md)
 - 산출물: [build/picovave.fwsc](build/picovave.fwsc)
 - 시뮬레이터: [build/sim/index.html](build/sim/index.html) — `python3 -m http.server -d build/sim 8738`
-  (페이지 상단의 **한국어 / EN** 버튼으로 언어를 바꾼다. 선택은 브라우저에 기억된다.)
+  (페이지 상단의 **한국어 / EN** 버튼으로 언어를 바꾼다. 선택은 브라우저에 기억된다. 머리말 오른쪽의
+  **STAR** 는 이 저장소를 스타하는 GitHub 링크다 — 페이지가 외부에서 불러오는 것은 그 링크뿐이다.)
 
 ## 하나의 소스, 세 개의 소비자
 
