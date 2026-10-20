@@ -196,6 +196,26 @@ check("page wires the cart upload and erase",
       !!(listeners["cartp8"] && listeners["cartSend"] && listeners["cartErase"]), "");
 check("page offers a cart TARGET select (SIMULATOR vs FLASH(USB))", /id="cartmode"/.test(html), "");
 
+// The gallery: a curated grid of community carts, each card naming the thread it came from. Every
+// card must point at a file the build actually serves (tools/build_sim.py copies carts/*.p8.png),
+// or the page would offer a one-click transfer that 404s.
+const grid = (elements["galleryGrid"] || {}).innerHTML || "";
+const cardFiles = (grid.match(/data-cart="([^"]+)"/g) || []).map(function (s) { return s.slice(11, -1); });
+const missingCards = cardFiles.filter(function (f) {
+  return !fs.existsSync(path.join(serveDir, "carts", f));
+});
+check("page shows a gallery of community carts", cardFiles.length >= 8 &&
+      new Set(cardFiles).size === cardFiles.length, cardFiles.length + " cards");
+check("every gallery card is a cart the build serves",
+      cardFiles.length > 0 && missingCards.length === 0, missingCards.join(", ") || "all served");
+check("every gallery card links to its source thread",
+      (grid.match(/href="https:\/\/www\.lexaloffle\.com\/bbs\/\?pid=\d+"/g) || []).length === cardFiles.length,
+      (grid.match(/lexaloffle\.com\/bbs\/\?pid=/g) || []).length + " links");
+check("the gallery names the target the cartridge slot panel chose",
+      /SIMULATOR/.test((elements["galleryTargetNote"] || {}).innerHTML || ""),
+      (elements["galleryTargetNote"] || {}).innerHTML || "");
+check("the gallery is reachable from the masthead", /href="#gallery"/.test(html) && /id="gallery"/.test(html), "");
+
 // The panel presses drive the firmware through the same path the worklet uses.
 try {
   const d0 = txt("draws");
