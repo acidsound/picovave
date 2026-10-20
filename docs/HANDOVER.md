@@ -35,7 +35,8 @@ build/`picovave.fwsc`(**태그 `993b2146`**)가 현재 패키지다. `784914b2`(
 - 대상: **M-Vave SMK-37 Pro** — JieLi **AC791N/WL82**, pi32v2, XIP 실행(코드는 flash 0x02000000 대역).
 - 이 트리는 상위 `hello` 트리(같은 플랫폼 HAL·USB/OTA·복구·메모리맵)를 복제해 이름만 바꾼 뒤
   앱 계층을 PICO-8로 갈아끼운 것이다(`hello`는 공개하지 않았다). 이 트리 문서:
-  [`../README.md`](../README.md), [`REVERSE_ENGINEERING.md`](REVERSE_ENGINEERING.md).
+  [`../README.md`](../README.md) · [`../README.kr.md`](../README.kr.md),
+  [`REVERSE_ENGINEERING.md`](REVERSE_ENGINEERING.md).
 - 트리:
 
 ```
