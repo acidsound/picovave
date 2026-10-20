@@ -281,12 +281,15 @@ This is unofficial firmware; installing it is your responsibility.
 
 ## License
 
-picovave's own code (`src/`, `sim/`, `host/`, `web/`, `tools/`, `docs/`) is **MIT** — see
-[LICENSE](LICENSE). Two vendored trees are not:
+**GPL-3.0-only** — see [LICENSE](LICENSE). It covers everything picovave wrote (`src/`, `sim/`,
+`host/`, `web/`, `tools/`, `docs/`) and the built `picovave.fwsc`, and it is the license the
+vendored Makkuro37 platform already carried, so source and binary finally agree.
 
-- `femto8/` — femto8 (Ben Baker), MIT; Lua 5.4, MIT; LodePNG, zlib (not linked into the firmware).
-  The PICO-8 compression snippets are Lexaloffle's, and PICO-8 itself is not open source.
-- `platform/` — **GPL-3.0-only** (Leo Kuroshita / Hügelton Instruments; Makkuro37 (C) M. Geisler).
-  The firmware links it, so the built `picovave.fwsc` is a combined work and is GPL-3.0-only.
+Two vendored trees are stated separately:
+
+- `femto8/` — femto8 (Ben Baker) and Lua 5.4, both MIT, included in the GPL-3.0 work with their
+  notices intact; LodePNG (zlib) is not linked. The PICO-8 compression snippets are Lexaloffle's,
+  and PICO-8 itself is not open source.
+- `platform/` — GPL-3.0-only (Leo Kuroshita / Hügelton Instruments; Makkuro37 (C) M. Geisler).
 
 Details: [NOTICE](NOTICE).

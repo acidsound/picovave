@@ -262,12 +262,15 @@ macOS에서는 JieLi 툴체인 명령도 linux/amd64 Docker 컨테이너에서 �
 
 ## 라이선스
 
-picovave가 직접 쓴 코드(`src/`, `sim/`, `host/`, `web/`, `tools/`, `docs/`)는 **MIT**다 —
-[LICENSE](LICENSE). vendor한 두 트리는 아니다:
+**GPL-3.0-only** — [LICENSE](LICENSE). picovave가 쓴 모든 것(`src/`, `sim/`, `host/`, `web/`,
+`tools/`, `docs/`)과 빌드 산출물 `picovave.fwsc`가 이 라이선스이며, vendor한 Makkuro37 플랫폼이
+이미 갖고 있던 라이선스이기도 하다 — 이제 소스와 바이너리가 같은 조건이다.
 
-- `femto8/` — femto8(Ben Baker) MIT, Lua 5.4 MIT, LodePNG zlib(펌웨어에 링크하지 않음). PICO-8 압축
-  스니펫은 Lexaloffle의 것이고 PICO-8 자체는 오픈소스가 아니다.
-- `platform/` — **GPL-3.0-only**(Leo Kuroshita / Hügelton Instruments, Makkuro37 © M. Geisler).
-  펌웨어가 이 트리를 링크하므로 빌드 산출물 `picovave.fwsc`는 결합 저작물이며 GPL-3.0-only다.
+vendor한 두 트리는 따로 적는다:
+
+- `femto8/` — femto8(Ben Baker)과 Lua 5.4는 MIT이며, 고지문을 유지한 채 GPL-3.0 저작물에 포함된다.
+  LodePNG(zlib)는 링크하지 않는다. PICO-8 압축 스니펫은 Lexaloffle의 것이고 PICO-8 자체는
+  오픈소스가 아니다.
+- `platform/` — GPL-3.0-only(Leo Kuroshita / Hügelton Instruments, Makkuro37 © M. Geisler).
 
 자세한 것은 [NOTICE](NOTICE).
