@@ -2627,7 +2627,7 @@ async function galleryPick(item) {
  * instance is handed the whole arena array (DEVICE_ARENA_MAX, below) so a cart that is far too big
  * for the hardware is still perfectly good on the simulator. This is the "before upload" warning;
  * the upload itself is unchanged. */
-const DEVICE_HEAP = 414936 - 1024;
+const DEVICE_HEAP = 415696 - 1024;
 /* The running page simulator's pool: sim/device_alloc.c's PV_ARENA_MAX, i.e. the whole array. Only
  * the THROWAWAY measurement instance keeps the default PV_ARENA - the device's own arena - because
  * that instance is the device verdict. */
@@ -2744,7 +2744,7 @@ async function loadCart(file) {
   setCartSay("cartInspecting", { name: cartName, len: cartRaw.length, compile: compileText() });
   cartFit = await measureCart(cartWire || cartRaw);   // measure what will actually be uploaded
   setCartSay("cartInfo", { name: cartName, len: cartRaw.length, compile: compileText(), fit: fitText() });
-  if (cartFit && cartFit.refused > 0)
+  if (cartFit && (cartFit.refused > 0 || cartFit.frames < MEASURE_FRAMES))
     // A cart the pool served only by refusing still runs, but a refusal IS a hitch (Lua collects and
     // retries): amber, and the line says how often. cartTight() is the harder gate the upload asks.
     warn("cartReadyWarn", { name: cartName, fit: fitText().slice(3), target: CART_TARGETS[cartTarget] });

@@ -34,9 +34,17 @@ const u64 = (p, v) => { if (mem) new DataView(mem.buffer).setBigUint64(p, BigInt
 
 async function load() {
   if (!compiled) {
-    const r = await fetch(new URL("./luabc.wasm", import.meta.url));
-    if (!r.ok) throw new Error("luabc.wasm 없음 (" + r.status + ")");
-    compiled = await WebAssembly.compile(await r.arrayBuffer());
+    let buf;
+    if (typeof process !== "undefined" && process.versions && process.versions.node) {
+      const fs = await import("fs");
+      const { fileURLToPath } = await import("url");
+      buf = fs.readFileSync(fileURLToPath(new URL("./luabc.wasm", import.meta.url)));
+    } else {
+      const r = await fetch(new URL("./luabc.wasm", import.meta.url));
+      if (!r.ok) throw new Error("luabc.wasm 없음 (" + r.status + ")");
+      buf = await r.arrayBuffer();
+    }
+    compiled = await WebAssembly.compile(buf);
   }
   return compiled;
 }
