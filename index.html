@@ -802,7 +802,8 @@
               <button id="simPicovave" class="pri on" type="button">SIMULATOR picovave.fwsc</button>
               <label id="drop"><span id="lblDrop">원복용 .fwsc 선택 / 끌어다 놓기</span><input type="file" id="v016" accept=".fwsc"></label>
               <button id="simRestore" class="ghost" type="button">SIMULATOR 복원</button>
-              <a id="dlPicovave" class="ghost" href="./picovave.fwsc" download>picovave.fwsc 내려받기</a>
+              <a id="dlPicovave" class="ghost" href="./picovave.fwsc" download="picovave-smk37.fwsc">SMK-37 Pro .fwsc 내려받기</a>
+              <a id="dlPicovaveFm1" class="ghost" href="./picovave-fm1.fwsc" download="picovave-fm1.fwsc">FM-1 .fwsc 내려받기</a>
             </div>
           </section>
 
@@ -811,11 +812,12 @@
               <span class="station-no">02</span>
               <div>
                 <h4 id="lblUsb">실기에 설치</h4>
-                <p id="descUsb">USB MIDI로 연결된 SMK-37 Pro에 같은 패키지를 쓴다. Chrome(HTTPS 또는 localhost)과 MIDI 권한이 필요하다.</p>
+                <p id="descUsb">USB MIDI로 연결된 SMK-37 Pro / FM-1에 패키지를 쓴다. Chrome(HTTPS 또는 localhost)과 MIDI 권한이 필요하다.</p>
               </div>
             </header>
             <div class="ctl">
-              <button id="flashPicovave" class="danger" type="button">FLASH(USB) picovave.fwsc</button>
+              <button id="flashPicovave" class="danger" type="button">FLASH(USB) SMK-37 Pro</button>
+              <button id="flashPicovaveFm1" class="danger" type="button">FLASH(USB) FM-1</button>
               <button id="flashRestore" class="ghost" type="button">FLASH(USB) 복원</button>
               <div class="field">
                 <label class="field-label" id="lblMidiPort" for="midiport">MIDI 포트</label>
@@ -977,7 +979,10 @@ const I18N = {
     idle: "대기",
     drop: "원복용 .fwsc 선택 / 끌어다 놓기",
     simRestore: "SIMULATOR 복원",
-    download: "picovave.fwsc 내려받기",
+    download: "SMK-37 Pro용 내려받기",
+    downloadFm1: "FM-1용 내려받기",
+    flashSmk37: "FLASH(USB) SMK-37 Pro",
+    flashFm1: "FLASH(USB) FM-1",
     flashRestore: "FLASH(USB) 복원",
     midiPortTitle: "FLASH(USB) 가 쓸 MIDI 포트",
     midiScan: "MIDI 포트 진단",
@@ -1265,7 +1270,10 @@ const I18N = {
     idle: "Idle",
     drop: "Choose or drop a restore .fwsc",
     simRestore: "SIMULATOR restore",
-    download: "Download picovave.fwsc",
+    download: "Download SMK-37 Pro .fwsc",
+    downloadFm1: "Download FM-1 .fwsc",
+    flashSmk37: "FLASH(USB) SMK-37 Pro",
+    flashFm1: "FLASH(USB) FM-1",
     flashRestore: "FLASH(USB) restore",
     midiPortTitle: "MIDI port FLASH(USB) will use",
     midiScan: "Diagnose MIDI ports",
@@ -1681,6 +1689,9 @@ function renderStatic() {
   $("lblDrop").textContent = t("drop");
   $("simRestore").textContent = t("simRestore");
   $("dlPicovave").textContent = t("download");
+  if ($("dlPicovaveFm1")) $("dlPicovaveFm1").textContent = t("downloadFm1");
+  if ($("flashPicovave")) $("flashPicovave").textContent = t("flashSmk37");
+  if ($("flashPicovaveFm1")) $("flashPicovaveFm1").textContent = t("flashFm1");
   $("flashRestore").textContent = t("flashRestore");
   $("midiport").title = t("midiPortTitle");
   $("midiscan").textContent = t("midiScan");
@@ -1717,6 +1728,8 @@ function setLang(next, persist) {
 const FW = {
   picovave: { label: "PICOVAVE", wasm: "./sim.wasm", pkg: "./picovave.fwsc",
            moto: 'PICO-8 console · SMK-37 Pro' },
+  fm1: { label: "PICOVAVE (FM-1)", wasm: "./sim.wasm", pkg: "./picovave-fm1.fwsc",
+           moto: 'PICO-8 console · FM-1' },
 };
 
 // Cache-busting. hello and picovave were once served from the same URL (localhost:PORT/sim.wasm,
@@ -2415,6 +2428,12 @@ $("flashPicovave").addEventListener("click", () => {
   if (!pkgs.picovave || !pkgs.picovave.raw) return fail("missingPicovave");
   flashUsb(pkgs.picovave.raw, "picovave.fwsc", false);
 });
+if ($("flashPicovaveFm1")) {
+  $("flashPicovaveFm1").addEventListener("click", () => {
+    if (!pkgs.fm1 || !pkgs.fm1.raw) return fail("missingPicovave");
+    flashUsb(pkgs.fm1.raw, "picovave-fm1.fwsc", false);
+  });
+}
 $("flashRestore").addEventListener("click", () => {
   if (!userRaw) return fail("needRestore");
   flashUsb(userRaw, t("restoreLabel"), true);   // the stock ROM has the official loader, not ours: allow it
