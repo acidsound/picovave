@@ -27,7 +27,7 @@
 
 
 #if !defined(LUAI_GCPAUSE)
-#define LUAI_GCPAUSE	200  /* 200% */
+#define LUAI_GCPAUSE	110  /* 110% */
 #endif
 
 #if !defined(LUAI_GCMAJOR)

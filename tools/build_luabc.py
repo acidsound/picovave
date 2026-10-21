@@ -70,7 +70,10 @@ def main():
         h.update(hd.name.encode())
         h.update(hd.read_bytes())
     digest = h.hexdigest()
+    web_wasm = SRC / "web" / "sim" / "luabc.wasm"
     if wasm.exists() and stamp.exists() and stamp.read_text().strip() == digest:
+        if not web_wasm.exists() or web_wasm.read_bytes() != wasm.read_bytes():
+            shutil.copyfile(wasm, web_wasm)
         print("luabc    %s  %d B  (unchanged)" % (wasm, wasm.stat().st_size))
         return 0
 
@@ -87,6 +90,8 @@ def main():
         sys.stderr.write(r.stdout + r.stderr)
         raise SystemExit("build_luabc: emcc failed")
     stamp.write_text(digest + "\n")
+    if not web_wasm.exists() or web_wasm.read_bytes() != wasm.read_bytes():
+        shutil.copyfile(wasm, web_wasm)
     print("luabc    %s  %d B" % (wasm, wasm.stat().st_size))
     return 0
 

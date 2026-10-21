@@ -89,15 +89,15 @@ static uint16_t pv_row[GDI_OUT_W];
 static uint8_t pv_row_sx[GDI_OUT_W];        /* pv_sx is the SysEx buffer further down */
 static uint8_t pv_row_sx_ready;
 
-/* Copy one PANEL row y of the engine's 128x128 screen into pv_row, expanded to 240 pixels and
+/* Copy one PANEL row y of the engine's 128x128 screen into dst, expanded to 240 pixels and
  * byte-swapped for the ST7789, ready for lcd_stream_row(). */
-static void pv_row_load(int y)
+static void pv_row_load(int y, uint16_t *dst)
 {
     int x;
-    gdi_expand_row(p8_screen_fb, pv_row_sx, y, pv_row);
+    gdi_expand_row(p8_screen_fb, pv_row_sx, y, dst);
     for (x = 0; x < GDI_OUT_W; x++) {
-        uint16_t v = pv_row[x];
-        pv_row[x] = (uint16_t)((v >> 8) | (v << 8));
+        uint16_t v = dst[x];
+        dst[x] = (uint16_t)((v >> 8) | (v << 8));
     }
 }
 
@@ -147,10 +147,19 @@ static void pv_push_dirty(const uint8_t *row_dirty)
         end = y;
         /* One address window per run: the command overhead is paid once per run, not per row. */
         lcd_stream_begin(0u, (uint32_t)start, GDI_OUT_W, (uint32_t)(end - start + 1));
+        uint16_t *cur = pv_row;
+        uint16_t *next = lcd_fillbuf;
+        pv_row_load(start, cur);
         for (i = start; i <= end; i++) {
             lcd_stream_wait();         /* the previous row is still on the wire */
-            pv_row_load(i);
-            lcd_stream_row(pv_row, GDI_OUT_W);
+            if (cur == pv_row)
+                lcd_stream_row(pv_row, GDI_OUT_W);
+            else
+                lcd_stream_row(lcd_fillbuf, GDI_OUT_W);
+            if (i < end) {
+                pv_row_load(i + 1, next);
+                uint16_t *tmp = cur; cur = next; next = tmp;
+            }
         }
         lcd_stream_end();              /* wait for the run's last row, then raise CS */
         rows += (uint32_t)(end - start + 1);
