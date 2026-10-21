@@ -323,13 +323,13 @@ def main():
     # The page's DEVICE box has two halves. SIMULATOR verifies and "flashes" the package into
     # its modelled flash; FLASH(USB) serves it to a real device over SysEx. Both use our own
     # picovave.fwsc; the stock v016 is the user's file, never ours.
-    src = SRC / "build" / "picovave.fwsc"
-    name = "picovave.fwsc"
-    if src.exists():
-        shutil.copy(src, a.out / name)
-        print("package  %s  %d B" % (a.out / name, src.stat().st_size))
-    else:
-        print("package  %s missing - run tools/build_picovave.py to enable FLASH" % name)
+    for name in ("picovave.fwsc", "picovave-smk37.fwsc", "picovave-fm1.fwsc"):
+        src = SRC / "build" / name
+        if src.exists():
+            shutil.copy(src, a.out / name)
+            print("package  %s  %d B" % (a.out / name, src.stat().st_size))
+        elif name == "picovave.fwsc":
+            print("package  %s missing - run tools/build_picovave.py to enable FLASH" % name)
 
     rc = 0
     node = shutil.which("node")

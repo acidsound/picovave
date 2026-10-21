@@ -91,12 +91,13 @@ static uint32_t pv_gamepad(void)
         g |= AXIS_L_RIGHT;
     if ((lo & ((1u << 8) | (1u << 10))) || (in.pads & (1u << 1)))
         g |= AXIS_L_UP;
-    if ((hi & (1u << 1)) || (in.pads & (1u << 15)))
-        g |= BUTTON_1;                /* A = PICO-8 O */
-    if ((hi & (1u << 4)) || (in.pads & (1u << 14)))
-        g |= BUTTON_2;                /* B = PICO-8 X */
-    if ((hi & (1u << 0)) || (in.pads & (1u << 13)))
-        g |= BUTTON_START;            /* the seam's Start: a cart reads it as PICO-8's btn(6) */
+    if ((lo & (1u << 28)) || (hi & (1u << 1)) || (in.pads & (1u << 15)))
+        g |= BUTTON_1;                /* E5 or A5 or pad 15 = PICO-8 O */
+    if ((lo & (1u << 31)) || (hi & (1u << 4)) || (in.pads & (1u << 14)))
+        g |= BUTTON_2;                /* G5 or C6 or pad 14 = PICO-8 X */
+    if ((lo & ((1u << 29) | (1u << 30))) || (hi & (1u << 0)) || (in.pads & (1u << 13)) ||
+        (in.buttons & ((1u << 12) | (1u << 16) | (1u << 8))))
+        g |= BUTTON_START;            /* F/F#5 or G#5 or pad 13 or PLAY/HOME: Start / btn(6) */
 
 #ifdef PV_DEBUG_REMOTE
     /* The diagnostic harness overrides the panel, one frame at a time. This is deliberately

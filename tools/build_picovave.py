@@ -208,29 +208,34 @@ def engine_sources():
             + sorted((FEMTO8 / "stub" / "device").glob("*.c")))
 
 
-def gen_cart_header():
-    """Bake the default cart (tools/pvcart.py, a cooked cart) into build/picovave/cart_default.h:
+def gen_cart_header(out_dir=OUT):
+    """Bake the default cart (tools/pvcart.py, a cooked cart) into cart_default.h:
     the cart that runs on a blank device.
 
     A device with no cart in the store still has to show something, exactly as the simulator
     does (sim/cart_default.h, the same bytes)."""
-    out = OUT / "cart_default.h"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / "cart_default.h"
     out.write_text(pvcart.header(origin="tools/build_picovave.py from tools/pvcart.py"))
     print("cart     %s  %d B" % (out.relative_to(SRC), pvcart.COOKED_SIZE))
 
 
 def platform_tools():
-    """Import picovave's vendored build/packaging tools and select the SMK-37 Pro board."""
+    """Import picovave's vendored build/packaging tools."""
     os.environ.setdefault("JIELI_TOOLCHAIN", str(Path.home() / ".jieli" / "toolchain"))
+    if not os.environ.get("AC79_SDK") and (Path.home() / "fw-AC79_AIoT_SDK").exists():
+        os.environ["AC79_SDK"] = str(Path.home() / "fw-AC79_AIoT_SDK")
     sys.path.insert(0, str(PLAT / "tools"))
     import build as mkbuild                       # noqa: E402
     import fm1pkg_make                            # noqa: E402
-    mkbuild.BOARD = "smk37"
-    fm1pkg_make.set_board("smk37")
     return mkbuild, fm1pkg_make
 
 
-def build_loader(mkbuild):
+def get_out(board="smk37"):
+    return SRC / "build" / ("picovave" if board == "smk37" else f"picovave-{board}")
+
+
+def build_loader(mkbuild, board="smk37"):
     """Build the update loader (ota.bin) from Makkuro37's loader sources, unchanged.
 
     The app image is only half of a usable package: the running firmware reads the package's
@@ -238,16 +243,19 @@ def build_loader(mkbuild):
     makkuro37.fwsc ships exactly this loader; picovave ships the identical bytes. Override with
     --loader PATH to use a prebuilt ota.bin.
     """
+    out_dir = get_out(board)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    mkbuild.BOARD = board
     mkbuild.build_loader()                        # writes picovave/platform/build/loader/ota.bin
     ota = (PLAT / "build" / "loader" / "ota.bin").read_bytes()
-    OUT.mkdir(parents=True, exist_ok=True)
-    (OUT / "ota.bin").write_bytes(ota)
+    (out_dir / "ota.bin").write_bytes(ota)
     return ota
 
 
-def build_app(fm1pkg_make, product):
+def build_app(fm1pkg_make, product, board="smk37"):
     """Compile + link picovave.bin with Makkuro37's startup, linker map and flags."""
-    OUT.mkdir(parents=True, exist_ok=True)
+    out_dir = get_out(board)
+    out_dir.mkdir(parents=True, exist_ok=True)
     gen_font = subprocess.run([sys.executable, str(SRC / "tools" / "mkfont.py"),
                                str(PICOVAVE / "src" / "picovave_font.h")],
                               capture_output=True, text=True)
@@ -256,11 +264,11 @@ def build_app(fm1pkg_make, product):
         raise SystemExit("build_picovave: mkfont failed")
     sys.stdout.write(gen_font.stdout)
 
-    gen_cart_header()
+    gen_cart_header(out_dir)
 
-    # app.ld: same script, the SMK-37 Pro's XIP length (picovave/platform/tools/build.py does this too)
+    # app.ld: same script, adjusted to each board's XIP length
     app_slot = fm1pkg_make.APP_SLOT
-    ld = OUT / "app.ld"
+    ld = out_dir / "app.ld"
     txt = (PLAT / "firmware" / "app.ld").read_text()
     if txt.count("LENGTH = 0x8DFBC") != 1:
         raise SystemExit("build_picovave: app.ld: the XIP LENGTH line was not found")
@@ -268,13 +276,15 @@ def build_app(fm1pkg_make, product):
 
     # Everything compiles in ONE toolchain invocation: a docker run costs about a second and
     # there are ~55 translation units (the engine, the Lua core, the device seam and stubs).
-    obj = OUT / "obj"
+    obj = out_dir / "obj"
     obj.mkdir(parents=True, exist_ok=True)
     cc = "%s/pi32v2/bin/clang -target pi32v2" % tcbin()
     sysinc = " ".join("-isystem " + shlex.quote(str(p)) for p in sys_includes())
-    flaglist = [*CFLAGS, "-DBOARD_SMK37=1", '-DFELUCCA_ID="%s"' % product,
+    board_flag = "-DBOARD_SMK37=1" if board == "smk37" else "-DBOARD_SMK37=0"
+    includes = [*APP_INCLUDES, str(out_dir.relative_to(SRC))]
+    flaglist = [*CFLAGS, board_flag, '-DFELUCCA_ID="%s"' % product,
                 '-DPV_BUILD_TAG="%s"' % sources.build_tag(),
-                *ENGINE_DEFINES, *("-I" + p for p in APP_INCLUDES)]
+                *ENGINE_DEFINES, *("-I" + p for p in includes)]
     flags = " ".join(shlex.quote(f) for f in flaglist) + " " + sysinc
     objs, lines = [], ["set -e"]
     for s in [PLAT / "firmware" / "crt0.S", PLAT / "firmware" / "hal" / "fm1_vec.S",
@@ -290,21 +300,21 @@ def build_app(fm1pkg_make, product):
         objs.append(o)
     # --gc-sections: without it every pulled archive member's .text is kept and the image
     # overruns the app slot (the linker script KEEPs the entry and .ram_text).
-    elf = OUT / "picovave.elf"
+    elf = out_dir / "picovave.elf"
     lines.append("%s/pi32v2/bin/ld -T %s %s -L%s/%s -lc -lm -lcompiler_rt --gc-sections -Map=%s -o %s"
                  % (tcbin(), rel(ld), " ".join(rel(o) for o in objs), tcbin(), LIBDIR,
-                    rel(OUT / "picovave.map"), rel(elf)))
+                    rel(out_dir / "picovave.map"), rel(elf)))
     run_shell("\n".join(lines))
 
     for sect in ("text.bin", "data.bin", "ramtext.bin"):
-        (OUT / sect).unlink(missing_ok=True)
+        (out_dir / sect).unlink(missing_ok=True)
     syms = tc("common/bin/objdump", "-t", elf)
     dis = tc("common/bin/objdump", "-d", elf)
     rt = tc("common/bin/objdump", "-d", "-j", ".ram_text", elf)
-    (OUT / "picovave.dis").write_text(dis)
-    tc("common/bin/objcopy", "-O", "binary", "-j", ".text", elf, OUT / "text.bin")
-    tc("common/bin/objcopy", "-O", "binary", "-j", ".data", elf, OUT / "data.bin")
-    tc("common/bin/objcopy", "-O", "binary", "-j", ".ram_text", elf, OUT / "ramtext.bin")
+    (out_dir / "picovave.dis").write_text(dis)
+    tc("common/bin/objcopy", "-O", "binary", "-j", ".text", elf, out_dir / "text.bin")
+    tc("common/bin/objcopy", "-O", "binary", "-j", ".data", elf, out_dir / "data.bin")
+    tc("common/bin/objcopy", "-O", "binary", "-j", ".ram_text", elf, out_dir / "ramtext.bin")
 
     def symv(name):
         m = re.search(r"^([0-9a-f]+) .*\s" + name + r"$", syms, re.M)
@@ -312,10 +322,10 @@ def build_app(fm1pkg_make, product):
             raise SystemExit("build_picovave: symbol %s not found" % name)
         return int(m.group(1), 16)
 
-    img = bytearray((OUT / "text.bin").read_bytes())
+    img = bytearray((out_dir / "text.bin").read_bytes())
     for sect, lname in (("ramtext.bin", "_rt_load"), ("data.bin", "_data_load")):
         load = symv(lname)
-        blob = (OUT / sect).read_bytes() if (OUT / sect).exists() else b""
+        blob = (out_dir / sect).read_bytes() if (out_dir / sect).exists() else b""
         if not blob:
             continue
         if load % 4:
@@ -325,7 +335,7 @@ def build_app(fm1pkg_make, product):
         img += b"\xff" * (load - APP_XIP - len(img))
         img += blob
     img += b"\xff" * (-len(img) % 4)
-    (OUT / "picovave.bin").write_bytes(img)
+    (out_dir / "picovave.bin").write_bytes(img)
 
     # --- checks -------------------------------------------------------------
     errors, notes = [], []
@@ -405,10 +415,61 @@ def build_app(fm1pkg_make, product):
     return bytes(img), errors, notes
 
 
+def build_target(board, mkbuild, fm1pkg_make, out_path=None, product=None, loader_path=None, sdk=None, skip_pkg=False):
+    mkbuild.BOARD = board
+    fm1pkg_make.set_board(board)
+    product = product or fm1pkg_make.BOARDS[board][2]
+    out_dir = get_out(board)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if out_path is None:
+        out_path = SRC / "build" / ("picovave.fwsc" if board == "smk37" else f"picovave-{board}.fwsc")
+
+    ota_path = loader_path or (out_dir / "ota.bin")
+    if loader_path is None:
+        print("loader   %d B (built from picovave/platform/firmware/loader for %s)"
+              % (len(build_loader(mkbuild, board)), board))
+    elif not ota_path.exists():
+        raise SystemExit("build_picovave: %s not found" % ota_path)
+    else:
+        (out_dir / "ota.bin").write_bytes(ota_path.read_bytes())
+
+    img, errors, notes = build_app(fm1pkg_make, product, board=board)
+    print(f"[{board.upper()}]")
+    for n in notes:
+        print("  ok    " + n)
+    for e in errors:
+        print("  FAIL  " + e)
+    if errors:
+        raise SystemExit(f"build_picovave: checks failed for {board}")
+
+    if skip_pkg:
+        print("app      %s  %d B" % (out_dir / "picovave.bin", len(img)))
+        return img, None
+
+    if sdk:
+        fm1pkg_make.SDK = sdk
+    flash = fm1pkg_make.flash_image(img, fm1pkg_make.KEY)
+    pkg = fm1pkg_make.ufw(flash, (out_dir / "ota.bin").read_bytes(), product)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_bytes(pkg)
+    (out_dir / f"picovave-{board}.flash.bin").write_bytes(flash)
+    if board == "smk37":
+        (out_dir / "picovave.flash.bin").write_bytes(flash)
+        (SRC / "build" / "picovave-smk37.fwsc").write_bytes(pkg)
+
+    print("flash    %d B -> %s" % (len(flash), out_dir / f"picovave-{board}.flash.bin"))
+    print("package  %s  %d B, identity %r" % (out_path, len(pkg), product))
+    if board == "smk37":
+        print("package  %s  %d B, identity %r" % (SRC / "build" / "picovave-smk37.fwsc", len(pkg), product))
+    return img, pkg
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--product", default=None, help="package identity (default: SMK-37 Pro_700)")
-    ap.add_argument("--out", type=Path, default=SRC / "build" / "picovave.fwsc")
+    ap.add_argument("--board", choices=["smk37", "fm1", "all"], default="all",
+                    help="target board: smk37, fm1, or all (default: all)")
+    ap.add_argument("--product", default=None, help="package identity (default: per board)")
+    ap.add_argument("--out", type=Path, default=None, help="output .fwsc path (default: build/picovave[-board].fwsc)")
     ap.add_argument("--sdk", type=Path, default=None)
     ap.add_argument("--skip-package", action="store_true")
     ap.add_argument("--loader", type=Path, default=None, help="prebuilt ota.bin (default: build it)")
@@ -417,43 +478,27 @@ def main():
     if not (PLAT / "tools" / "fm1pkg_make.py").exists():
         raise SystemExit("build_picovave: the vendored platform is missing (expected %s)" % (PLAT / "tools"))
     mkbuild, fm1pkg_make = platform_tools()
-    product = a.product or fm1pkg_make.BOARDS["smk37"][2]      # "SMK-37 Pro_700"
+    sdk = a.sdk or Path(os.environ.get("AC79_SDK", str(Path.home() / "fw-AC79_AIoT_SDK")))
 
-    ota_path = a.loader or (OUT / "ota.bin")
-    if a.loader is None:
-        print("loader   %d B (built from picovave/platform/firmware/loader)" % len(build_loader(mkbuild)))
-    elif not ota_path.exists():
-        raise SystemExit("build_picovave: %s not found" % ota_path)
-    else:
-        (OUT / "ota.bin").write_bytes(ota_path.read_bytes())
+    boards = ["smk37", "fm1"] if a.board == "all" else [a.board]
+    stamp_data = {}
+    for b in boards:
+        prod = a.product if (len(boards) == 1 and a.product) else None
+        out_p = a.out if (len(boards) == 1 and a.out) else None
+        img, pkg = build_target(b, mkbuild, fm1pkg_make, out_path=out_p, product=prod,
+                                loader_path=a.loader, sdk=sdk, skip_pkg=a.skip_package)
+        out_dir = get_out(b)
+        out_pkg = out_p or (SRC / "build" / ("picovave.fwsc" if b == "smk37" else f"picovave-{b}.fwsc"))
+        if b == "smk37":
+            stamp_data["app_sha256"] = sources.sha256_file(out_dir / "picovave.bin")
+            if pkg is not None:
+                stamp_data["package_sha256"] = sources.sha256_file(out_pkg)
+        stamp_data[f"{b}_app_sha256"] = sources.sha256_file(out_dir / "picovave.bin")
+        if pkg is not None:
+            stamp_data[f"{b}_package_sha256"] = sources.sha256_file(out_pkg)
 
-    img, errors, notes = build_app(fm1pkg_make, product)
-    for n in notes:
-        print("  ok    " + n)
-    for e in errors:
-        print("  FAIL  " + e)
-    if errors:
-        raise SystemExit("build_picovave: checks failed")
-
-    if a.skip_package:
-        print("app      %s  %d B" % (OUT / "picovave.bin", len(img)))
-        sources.write_stamp({"app_sha256": sources.sha256_file(OUT / "picovave.bin")})
-        return 0
-
-    if a.sdk:
-        fm1pkg_make.SDK = a.sdk
-    flash = fm1pkg_make.flash_image(img, fm1pkg_make.KEY)
-    pkg = fm1pkg_make.ufw(flash, (OUT / "ota.bin").read_bytes(), product)
-    a.out.parent.mkdir(parents=True, exist_ok=True)
-    a.out.write_bytes(pkg)
-    (OUT / "picovave.flash.bin").write_bytes(flash)
-
-    print("flash    %d B -> %s" % (len(flash), OUT / "picovave.flash.bin"))
-    print("package  %s  %d B, identity %r" % (a.out, len(pkg), product))
-
-    stamp = sources.write_stamp({"app_sha256": sources.sha256_file(OUT / "picovave.bin"),
-                                 "package_sha256": sources.sha256_file(a.out),
-                                 "build_tag": sources.build_tag()})
+    stamp_data["build_tag"] = sources.build_tag()
+    stamp = sources.write_stamp(stamp_data)
     print("tag      %s (what the device reports once this package is on it)" % sources.build_tag())
     print("stamp    %s" % stamp.relative_to(SRC))
     return 0

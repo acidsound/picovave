@@ -54,8 +54,8 @@ SDK_SHA256 = {
 
 PRODUCT = "SMK-37 Pro_700"          # package identity; release builds are SMK-37 Pro_7XY
 BOARD = "smk37"
-BOARD_PREFIX = {"smk37": "SMK-37 Pro_7"}
-BOARD_DEFS = {"smk37": ["-DBOARD_SMK37=1"]}
+BOARD_PREFIX = {"smk37": "SMK-37 Pro_7", "fm1": "FM-1_9"}
+BOARD_DEFS = {"smk37": ["-DBOARD_SMK37=1"], "fm1": []}
 # smk37: the keyboard's model name (MODEL env or --model); one hardware, three names. pro adds no flag
 MODELS = {"pro": "SMK-37 Pro", "elite": "SMK-37 Elite", "mke": "MKE-P37"}
 VERSION = None                      # MK_VERSION for release builds (default: firmware/src/makkuro.c)

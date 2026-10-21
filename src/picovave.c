@@ -55,7 +55,11 @@
 #include "fm1_sys.h"          /* fm1_wdt_arm / fm1_wdt_feed / fm1_enter_uboot / fm1_enter_update */
 #include "fm1_irq.h"          /* fm1_irq_init / fm1_irq_attach (fm1_vec.S, fm1_isr.S) */
 #include "fm1_guard.h"        /* stack / write / bus / PC guards + the top-window lock */
+#if BOARD_SMK37
 #include "smk_input.h"        /* fm1_input_init / fm1_input_tick / fm1_enc_take / fm1_in */
+#else
+#include "fm1_input.h"
+#endif
 #include "fm1_timer.h"        /* fm1_timer5_start: the 10 kHz tick */
 #include "fm1_audio.h"        /* fm1_audio_init / fm1_audio_pending, the ALNK0 half buffers */
 #include "fm1_lcd_hw.h"       /* SPI1 pins and registers that lcd.c builds on */
@@ -371,9 +375,10 @@ static void hh_boot_stage(int stage)
 static void hh_input_read(hin_t *in)
 {
     uint32_t i;
-    /* TIMER5 runs Makkuro37's fm1_input_tick() at 10 kHz, so this only reads its debounced
+    /* TIMER5 runs the input ISR's fm1_input_tick() at 10 kHz, so this only reads its debounced
      * state. Scanning again here would fight the ISR for the 595 latch and the ADC. */
     in->buttons = fm1_in.buttons;             /* bit i = button i held (already debounced) */
+#if BOARD_SMK37
     in->keys = fm1_in.keys;                   /* bit k = keybed key k held */
     for (i = 0; i < HIN_NENC; i++)
         in->enc[i] = (int8_t)fm1_enc_take(i); /* detents since the previous read, consumed here */
@@ -387,6 +392,19 @@ static void hh_input_read(hin_t *in)
         in->fader[i] = fm1_in.fader[i];
     for (i = 0; i < HIN_NWHEEL; i++)          /* pitch and mod wheels, raw (10-bit) */
         in->wheel[i] = fm1_in.wheel[i];
+#else
+    /* FM-1: 27 keys (F3..G5) are bit 0..26 of fm1_in.notes.
+     * In the 37-keybed representation (C3..C6), F3 is key 5, so shift by 5. */
+    in->keys = ((uint64_t)fm1_in.notes) << 5;
+    for (i = 0; i < FM1_NENC && i < HIN_NENC; i++)
+        in->enc[i] = (int8_t)fm1_enc_take(i);
+    for (; i < HIN_NENC; i++)
+        in->enc[i] = 0;
+    in->pads = 0;
+    for (i = 0; i < HIN_NPAD; i++) in->pad_vel[i] = 0;
+    for (i = 0; i < HIN_NFADER; i++) in->fader[i] = 0;
+    for (i = 0; i < HIN_NWHEEL; i++) in->wheel[i] = 0;
+#endif
 }
 
 /* ------------------------------------------------ the two femto8 display hooks ---
