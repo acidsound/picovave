@@ -46,6 +46,27 @@ static uint8_t *pv_beg;            /* the first block */
 static uint8_t *pv_end;            /* the sentinel: never allocated, terminates every scan */
 static int      pv_up;
 
+#ifdef PV_DEBUG_REMOTE
+/* Diagnostic build only: the exact bytes the allocator has handed out, the high-water mark and
+ * the number of requests it could not serve. A query walks no blocks, so asking every frame is
+ * safe; a production build compiles none of this. */
+static uint32_t pv_dbg_used;
+static uint32_t pv_dbg_peak;
+static uint32_t pv_dbg_refused;
+
+uint32_t pv_heap_used(void)    { return pv_dbg_used; }
+uint32_t pv_heap_peak(void)    { return pv_dbg_peak; }
+uint32_t pv_heap_refused(void) { return pv_dbg_refused; }
+void pv_heap_peak_reset(void)  { pv_dbg_peak = pv_dbg_used; }
+
+static void pv_dbg_add(uint32_t n)
+{
+    pv_dbg_used += n;
+    if (pv_dbg_used > pv_dbg_peak)
+        pv_dbg_peak = pv_dbg_used;
+}
+#endif
+
 static uint32_t *pv_ftr(void *b) { return (uint32_t *)((uint8_t *)b + ((bhdr_t *)b)->size - PV_FTR); }
 static uint8_t  *pv_next(void *b) { return (uint8_t *)b + ((bhdr_t *)b)->size; }
 
@@ -84,6 +105,14 @@ void *malloc(size_t n)
         bhdr_t *h = (bhdr_t *)b;
         if (!h->free || h->size < need)
             continue;
+#ifdef PV_DEBUG_REMOTE
+        {
+            uint32_t got = h->size;
+            if (h->size - need >= PV_MIN_BLK)
+                got = need;
+            pv_dbg_add(got);
+        }
+#endif
         if (h->size - need >= PV_MIN_BLK) {
             /* split: the tail starts where this block's payload part ENDS (b + need) and stays
              * free. pv_next(b) is b + h->size - the block AFTER b (the sentinel, for the whole
@@ -98,6 +127,9 @@ void *malloc(size_t n)
         }
         return b + PV_HDR;
     }
+#ifdef PV_DEBUG_REMOTE
+    pv_dbg_refused++;
+#endif
     return NULL;
 }
 
@@ -108,6 +140,9 @@ void free(void *p)
     if (!p)
         return;
     b = (uint8_t *)p - PV_HDR;
+#ifdef PV_DEBUG_REMOTE
+    pv_dbg_used -= ((bhdr_t *)b)->size;
+#endif
     pv_set(b, ((bhdr_t *)b)->size, 1);
 
     next = pv_next(b);
@@ -149,12 +184,21 @@ void *realloc(void *p, size_t n)
     next = pv_next(b);
     if (next != pv_end && ((bhdr_t *)next)->free
         && ((bhdr_t *)b)->size + ((bhdr_t *)next)->size >= need) {
+#ifdef PV_DEBUG_REMOTE
+        uint32_t old = ((bhdr_t *)b)->size;
+#endif
         total = ((bhdr_t *)b)->size + ((bhdr_t *)next)->size;
         if (total - need >= PV_MIN_BLK) {
             pv_set((uint8_t *)b + need, total - need, 1);
             pv_set(b, need, 0);
+#ifdef PV_DEBUG_REMOTE
+            pv_dbg_add(need - old);
+#endif
         } else {
             pv_set(b, total, 0);
+#ifdef PV_DEBUG_REMOTE
+            pv_dbg_add(total - old);
+#endif
         }
         return p;
     }

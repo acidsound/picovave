@@ -48,6 +48,14 @@
 uint32_t picovave_boots;              /* frames stepped; the link check names it */
 int32_t  picovave_status;             /* 0 while running, else the last engine error */
 
+#ifdef PV_DEBUG_REMOTE
+/* Diagnostic build only: a host can drive the gamepad and read the engine's state over the cart
+ * SysEx channel. Both are declared here because pv_gamepad() is in this header; the command
+ * parser lives in src/picovave.c. */
+extern uint32_t pv_dbg_gamepad;
+extern uint16_t pv_dbg_gamepad_frames;
+#endif
+
 /* Provided by the target. */
 extern const uint8_t *hh_cart_data(void);
 extern uint32_t       hh_cart_size(void);
@@ -89,6 +97,16 @@ static uint32_t pv_gamepad(void)
         g |= BUTTON_2;                /* B = PICO-8 X */
     if ((hi & (1u << 0)) || (in.pads & (1u << 13)))
         g |= BUTTON_START;            /* the seam's Start: a cart reads it as PICO-8's btn(6) */
+
+#ifdef PV_DEBUG_REMOTE
+    /* The diagnostic harness overrides the panel, one frame at a time. This is deliberately
+     * after the physical map: a harness that sends a mask means exactly that mask, not "also
+     * hold the keys the bench is leaning on". */
+    if (pv_dbg_gamepad_frames) {
+        g = pv_dbg_gamepad;
+        pv_dbg_gamepad_frames--;
+    }
+#endif
 
     return g;
 }

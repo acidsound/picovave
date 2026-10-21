@@ -654,6 +654,98 @@ int hh_cart_kind(void)
 /* p8_load_cooked()/p8_begin() refused the cart: offer the next one (the store's rollback). */
 int hh_cart_next(void) { return pv_run_next(); }
 
+#ifdef PV_DEBUG_REMOTE
+/* ------------------------------------------------------------------ bench only ---
+ * A diagnostic firmware answers two extra commands in the cart's 0x7E namespace:
+ *
+ *   7F 00                    stats: status, boots, frames, fps, heap used/peak/refused,
+ *                            dirty rows, panel bytes/draws, stack high-water, deepest SP,
+ *                            the slot the ladder picked, and the active slot.
+ *   7F 01 <mask:4> <frames:2> override the gamepad for N frames (0 = release)
+ *   7F 02                    release the override
+ *   7F 03                    reset the heap peak to the bytes currently live
+ *
+ * It exists to reproduce a cart's first input transition on the bench without a hand on the
+ * panel. PV_DEBUG_REMOTE is not in the normal build; the only cost there is zero. */
+uint32_t pv_dbg_gamepad;
+uint16_t pv_dbg_gamepad_frames;
+extern uint32_t pv_heap_used(void);
+extern uint32_t pv_heap_peak(void);
+extern uint32_t pv_heap_refused(void);
+extern void     pv_heap_peak_reset(void);
+
+static void pv_dbg_reply(const uint8_t *body, uint32_t n)
+{
+    uint8_t m[80];
+    uint32_t k = 0, i;
+    if (n > sizeof m - 7u)
+        n = sizeof m - 7u;
+    m[k++] = 0xF0u; m[k++] = 0x22u; m[k++] = 0x24u; m[k++] = 0x35u; m[k++] = 0x7Eu;
+    m[k++] = 0x7Fu;
+    for (i = 0; i < n; i++)
+        m[k++] = (uint8_t)(body[i] & 0x7Fu);
+    m[k++] = 0xF7u;
+    hh_cart_reply(m, k);
+}
+
+static void pv_dbg_stats(void)
+{
+    uint8_t b[64];
+    int k = 0;
+
+    b[k++] = 0x00;
+    b[k++] = (uint8_t)(picovave_status < 0 ? 0x7F : picovave_status);
+    pv_put7(b + k, 5, picovave_boots);          k += 5;
+    pv_put7(b + k, 5, m_frames);                k += 5;
+    b[k++] = (uint8_t)m_fps;
+    pv_put7(b + k, 5, pv_heap_used());          k += 5;
+    pv_put7(b + k, 5, pv_heap_peak());          k += 5;
+    pv_put7(b + k, 3, pv_heap_refused());       k += 3;
+    pv_put7(b + k, 2, p8_panel_dirty_rows);     k += 2;
+    pv_put7(b + k, 5, p8_panel_bytes);          k += 5;
+    pv_put7(b + k, 5, p8_panel_draws);          k += 5;
+    pv_put7(b + k, 3, pv_stack_depth());        k += 3;
+    pv_put7(b + k, 5, pv_sp_min);               k += 5;
+    b[k++] = (uint8_t)pv_stack_of(pv_sp_min);
+    b[k++] = (uint8_t)(pv_run_slot + 1);        /* 0 = embedded default */
+    b[k++] = (uint8_t)(pv_cart.active + 1);     /* 0 = no stored slot */
+    pv_dbg_reply(b, (uint32_t)k);
+}
+
+static void pv_dbg_command(const uint8_t *p, uint32_t n)
+{
+    uint8_t b[2];
+    if (n < 1u)
+        return;
+    switch (p[0]) {
+    case 0x00:
+        pv_dbg_stats();
+        break;
+    case 0x01:
+        if (n < 7u)
+            break;
+        pv_dbg_gamepad = pv_get7(p + 1, 4);
+        pv_dbg_gamepad_frames = (uint16_t)pv_get7(p + 5, 2);
+        b[0] = 0x01; b[1] = 0x00;
+        pv_dbg_reply(b, 2u);
+        break;
+    case 0x02:
+        pv_dbg_gamepad = 0u;
+        pv_dbg_gamepad_frames = 0u;
+        b[0] = 0x02; b[1] = 0x00;
+        pv_dbg_reply(b, 2u);
+        break;
+    case 0x03:
+        pv_heap_peak_reset();
+        b[0] = 0x03; b[1] = 0x00;
+        pv_dbg_reply(b, 2u);
+        break;
+    default:
+        break;
+    }
+}
+#endif
+
 /* One F0..F7 frame from the USB host. usb.c hands it over raw (no F0/F7); rebuild the frame
  * the shared parser wants, and only take it if it is ours - M-UPGRADE's own frames must stay
  * for ota_service() (ota_take() consumes whatever is pending). */
@@ -669,6 +761,12 @@ static void pv_cart_poll(void)
     if (n < 5u || p[0] != 0x22u || p[1] != 0x24u || p[2] != 0x35u || p[3] != 0x7Eu)
         return;                            /* not the cart command: leave it to ota_service() */
     ota_frame_done();                      /* ours: ota_take() must not see it */
+#ifdef PV_DEBUG_REMOTE
+    if (p[4] == 0x7Fu) {                   /* the diagnostic command, not a cart transfer */
+        pv_dbg_command(p + 5, n - 5u);
+        return;
+    }
+#endif
     if (n + 2u > sizeof pv_sx)
         return;
     pv_sx[0] = 0xF0u;

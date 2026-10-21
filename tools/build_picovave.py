@@ -56,6 +56,8 @@ APP_XIP = 0x02000120
 ENTRY_STUB = bytes.fromhex("04818000")       # pi32v2: goto +4 ; rts
 CFLAGS = ["-Os", "-ffunction-sections", "-fno-builtin", "-Wall", "-Wno-unused-function",
           "-Wno-macro-redefined"]
+if os.environ.get("PV_DEBUG_REMOTE"):
+    CFLAGS.append("-DPV_DEBUG_REMOTE")
 LINE = re.compile(r"^\s*([0-9a-f]+):\s+((?:[0-9a-f]{2} )+)\s*\t(.*)$")
 ROM_LO, ROM_HI = 0xFFC00000, 0xFFD00000       # the chip's mask ROM: nothing may call or load it
 RAM_ORIGIN = 0x01C00E00                       # app.ld: start of the RAM region (RAMTEXT ends here)
