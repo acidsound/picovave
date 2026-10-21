@@ -351,7 +351,7 @@ static void hh_boot_stage(int stage)
     static char b[2];
     static char s[28];
     char *p;
-    if (!panel_up)
+    if (!panel_up || stage >= 5)
         return;
     b[0] = (char)('0' + (stage % 10));
     b[1] = 0;

@@ -172,15 +172,29 @@ void *realloc(void *p, size_t n)
     }
     b = (uint8_t *)p - PV_HDR;
     cap = ((bhdr_t *)b)->size - PV_HDR - PV_FTR;
-    if (cap >= n)
-        return p;
-    /* Grow in place over a free block that follows. Lua grows tables and strings by doubling, so
-     * without this every doubling has to hold the old block and the new one at once - the pool's
-     * real peak for a cart, and what decides whether a cart fits the device at all. */
     need = (uint32_t)n + PV_HDR + PV_FTR;
     need = (need + 7u) & ~(uint32_t)7;
     if (need < PV_MIN_BLK)
         need = PV_MIN_BLK;
+    if (cap >= n) {
+        uint32_t cur = ((bhdr_t *)b)->size;
+        if (cur - need >= PV_MIN_BLK) {
+            uint32_t tail_sz = cur - need;
+            uint8_t *tail = b + need;
+            pv_set(b, need, 0);
+            pv_set(tail, tail_sz, 1);
+            next = pv_next(tail);
+            if (next != pv_end && ((bhdr_t *)next)->free)
+                pv_set(tail, tail_sz + ((bhdr_t *)next)->size, 1);
+#ifdef PV_DEBUG_REMOTE
+            pv_dbg_used -= tail_sz;
+#endif
+        }
+        return p;
+    }
+    /* Grow in place over a free block that follows. Lua grows tables and strings by doubling, so
+     * without this every doubling has to hold the old block and the new one at once - the pool's
+     * real peak for a cart, and what decides whether a cart fits the device at all. */
     next = pv_next(b);
     if (next != pv_end && ((bhdr_t *)next)->free
         && ((bhdr_t *)b)->size + ((bhdr_t *)next)->size >= need) {
@@ -201,6 +215,39 @@ void *realloc(void *p, size_t n)
 #endif
         }
         return p;
+    }
+    if (b != pv_beg) {
+        uint32_t prev_len = *(uint32_t *)(b - PV_FTR);
+        bhdr_t *pb = (bhdr_t *)(b - prev_len);
+        if (pb->free) {
+            uint32_t next_sz = (next != pv_end && ((bhdr_t *)next)->free) ? ((bhdr_t *)next)->size : 0;
+            if (pb->size + ((bhdr_t *)b)->size + next_sz >= need) {
+                uint8_t *new_b = (uint8_t *)pb;
+                uint8_t *d = new_b + PV_HDR;
+                uint8_t *s = (uint8_t *)p;
+                size_t i;
+#ifdef PV_DEBUG_REMOTE
+                uint32_t old = ((bhdr_t *)b)->size;
+#endif
+                total = pb->size + ((bhdr_t *)b)->size + next_sz;
+                copy = cap < n ? cap : n;
+                for (i = 0; i < copy; i++)
+                    d[i] = s[i];
+                if (total - need >= PV_MIN_BLK) {
+                    pv_set(new_b, need, 0);
+                    pv_set(new_b + need, total - need, 1);
+#ifdef PV_DEBUG_REMOTE
+                    pv_dbg_add(need - old);
+#endif
+                } else {
+                    pv_set(new_b, total, 0);
+#ifdef PV_DEBUG_REMOTE
+                    pv_dbg_add(total - old);
+#endif
+                }
+                return d;
+            }
+        }
     }
     q = malloc(n);
     if (!q)

@@ -9,11 +9,10 @@
 #ifndef LCD_BAUD
 /* SPI1 is clocked from the chip's low-speed bus (lsb_clk). The stock v016 sequence runs the
  * panel at divider 4 (~12 MHz here), which makes a full 240x240 RGB565 frame take ~77 ms -
- * 13 fps no matter how fast the engine is. Divider 1 is ~30 MHz, the first step that puts the
- * pixel stream inside a 30 fps budget (115,200 B -> ~31 ms) while staying in the range these
- * ST7789-class 240x240 modules are commonly driven at. If a particular panel shows sparkle or
- * colour artefacts on the bench, divider 2 (~20 MHz) is the conservative fallback. */
-#define LCD_BAUD 1u
+ * 13 fps no matter how fast the engine is. Divider 1 is ~30 MHz (30.7 ms/frame). Divider 0 is
+ * ~60 MHz (15.3 ms/frame), cutting panel transfer time in half and reclaiming 15 ms per frame
+ * so full-screen 3D and multi-object animations sustain full 30 fps without falling behind. */
+#define LCD_BAUD 0u
 #endif
 
 static uint8_t lcd_small[64];

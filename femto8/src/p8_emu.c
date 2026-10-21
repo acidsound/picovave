@@ -132,6 +132,7 @@ static bool     p8_row_hash_valid;        /* a previous frame's hashes exist to 
 static bool     p8_panel_dirty_all = true;/* next frame: mark every row (restart, overlay, ...) */
 static uint8_t  m_dirty_transform;        /* what the hashes were taken under last frame */
 static uint8_t  m_dirty_hc_mode;
+static void     p8_dirty_invalidate(void);
 
 #ifndef SDL
 /* The panel-row mask only exists on the target that has a panel: GDI_OUT_H/GDI_H come from
@@ -650,6 +651,12 @@ int p8_stop_cart(void)
     cart_running = false;
     p8_close_cartdata();
     lua_shutdown_api();
+    void *fb = gdi_get_frame_buffer_addr(HW_LCDC_LAYER_0);
+    if (fb)
+        memset(fb, 0, GDI_W * GDI_H * sizeof(uint16_t));
+    memset(m_memory + MEMORY_SCREEN, 0, MEMORY_SCREEN_SIZE);
+    p8_dirty_invalidate();
+    gdi_display_update_async(NULL, NULL);
     return 0;
 }
 
@@ -1198,6 +1205,7 @@ void p8_reset(void)
     uint8_t cursor_y = m_memory[MEMORY_CURSOR + 1];
     memset(m_memory + MEMORY_DRAWSTATE, 0, MEMORY_DRAWSTATE_SIZE);
     memset(m_memory + MEMORY_HARDWARESTATE, 0, MEMORY_HARDWARESTATE_SIZE);
+    memset(m_memory + MEMORY_SCREEN, 0, MEMORY_SCREEN_SIZE);
     m_memory[MEMORY_SCREEN_PHYS] = 0x60;
     m_memory[MEMORY_MAP_START] = 0x20;
     m_memory[MEMORY_MAP_WIDTH] = 128;
