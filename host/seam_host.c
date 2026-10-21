@@ -78,3 +78,4 @@ BaseType_t xSemaphoreTake(SemaphoreHandle_t s, TickType_t ticks)
 
 TickType_t xTaskGetTickCount(void) { return host_ticks; }
 void vTaskDelay(TickType_t ticks) { host_ticks += ticks; }
+void p8_target_wdt_feed(void) { }

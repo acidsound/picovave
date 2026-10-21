@@ -125,6 +125,11 @@ void *malloc(size_t n)
         } else {
             pv_set(b, h->size, 0);                 /* too small to split: hand it over whole */
         }
+#ifdef OS_FREERTOS
+        extern void p8_target_wdt_feed(void);
+        if (((uintptr_t)b & 0x1F8) == 0)
+            p8_target_wdt_feed();
+#endif
         return b + PV_HDR;
     }
 #ifdef PV_DEBUG_REMOTE

@@ -984,7 +984,7 @@ void fm1_cstart(void)
     fm1_time_init();
     fm1_reset_reason();
     p3 = fm1_boot.p3_rst;
-    fm1_wdt_arm(0x0Du);                      /* ~8 s, reset mode: taken over before RAM is cleared */
+    fm1_wdt_arm(0x0Fu);                      /* ~32 s, reset mode: taken over before RAM is cleared */
     if ((p3 & 1u) && !(p3 & (4u | 0x40u)))
         bootguard_clear(&picovave_bootguard);   /* a power-on: no failed boot to count */
     boot_mode = bootguard_begin(&picovave_bootguard);

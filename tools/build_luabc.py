@@ -17,6 +17,7 @@ would say 8 for size_t and be refused.
 import argparse
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path

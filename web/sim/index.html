@@ -2744,7 +2744,7 @@ async function loadCart(file) {
   setCartSay("cartInspecting", { name: cartName, len: cartRaw.length, compile: compileText() });
   cartFit = await measureCart(cartWire || cartRaw);   // measure what will actually be uploaded
   setCartSay("cartInfo", { name: cartName, len: cartRaw.length, compile: compileText(), fit: fitText() });
-  if (cartFit && cartFit.refused > 0)
+  if (cartFit && (cartFit.refused > 0 || cartFit.frames < MEASURE_FRAMES))
     // A cart the pool served only by refusing still runs, but a refusal IS a hitch (Lua collects and
     // retries): amber, and the line says how often. cartTight() is the harder gate the upload asks.
     warn("cartReadyWarn", { name: cartName, fit: fitText().slice(3), target: CART_TARGETS[cartTarget] });

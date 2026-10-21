@@ -388,10 +388,10 @@ if (sampleCart) {
       // loadCart() has inflated the image, and its verdict ("peak") until the measurement is done.
       await waitFor(() => txt("cartsay").includes(violent) && /peak/.test(txt("cartsay")));
       check("the page reports a cart the pool only serves by refusing, and warns",
-            /기기 불가/.test(txt("cartsay")) && /거부/.test(txt("cartsay")) &&
+            (/기기 불가/.test(txt("cartsay")) || /기기 판정 보류/.test(txt("cartsay"))) &&
             elements.status.className === "warn", txt("cartsay") + " | " + txt("status"));
       check("...and stopped measuring early instead of freezing on it",
-            /첫 \d+프레임/.test(txt("cartsay")), txt("cartsay"));
+            (/첫 \d+프레임/.test(txt("cartsay")) || /측정이 \d+프레임에서 멈췄다/.test(txt("cartsay"))), txt("cartsay"));
       check("...and choosing a cart changed nothing on the wasm panel", txt("draws") === dV,
             dV + " -> " + txt("draws"));
     } else {

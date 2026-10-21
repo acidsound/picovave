@@ -318,6 +318,8 @@ int p8_load_bytecode(const uint8_t *payload, uint32_t size);
 extern jmp_buf jmpbuf_restart;
 int p8_begin(void);
 int p8_step(void);
+void p8_lua_gc_step(void);
+void p8_target_wdt_feed(void);
 /* picovave: give the loaded cart's memory back and leave the engine with no Lua state, ready for
  * the next p8_begin(). The harness's boot ladder calls it before each candidate, so what a
  * candidate is measured against is an empty pool - see the definition. */

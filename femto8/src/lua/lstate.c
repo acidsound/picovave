@@ -27,7 +27,7 @@
 
 
 #if !defined(LUAI_GCPAUSE)
-#define LUAI_GCPAUSE	110  /* 110% */
+#define LUAI_GCPAUSE	100  /* 100%: start GC immediately when allocating above settled memory */
 #endif
 
 #if !defined(LUAI_GCMAJOR)
@@ -35,7 +35,7 @@
 #endif
 
 #if !defined(LUAI_GCMUL)
-#define LUAI_GCMUL	200 /* GC runs 'twice the speed' of memory allocation */
+#define LUAI_GCMUL	300 /* GC runs 3x the speed of memory allocation */
 #endif
 
 

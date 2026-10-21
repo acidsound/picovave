@@ -1077,6 +1077,8 @@ void p8_render()
 
 static void p8_post_flip(void)
 {
+    p8_target_wdt_feed();
+    p8_lua_gc_step();
     p8_flush_cartdata();
     p8_update_input();
     p8_check_for_pause();

@@ -15,6 +15,7 @@
 #include <stdlib.h>
 
 #include "fm1_time.h"        /* fm1_ticks / fm1_delay_ms / FM1_TICKS_PER_US */
+#include "fm1_sys.h"         /* fm1_wdt_feed */
 
 #include "gdi.h"
 #include "FreeRTOS.h"
@@ -64,7 +65,21 @@ TickType_t xTaskGetTickCount(void)
     return (TickType_t)(fm1_ticks() / (1000u * FM1_TICKS_PER_US));
 }
 
-void vTaskDelay(TickType_t ticks) { fm1_delay_ms((uint32_t)ticks); }
+void p8_target_wdt_feed(void) { fm1_wdt_feed(); }
+
+void vTaskDelay(TickType_t ticks)
+{
+    uint32_t ms = (uint32_t)ticks;
+    while (ms > 20u) {
+        fm1_wdt_feed();
+        fm1_delay_ms(20u);
+        ms -= 20u;
+    }
+    if (ms) {
+        fm1_wdt_feed();
+        fm1_delay_ms(ms);
+    }
+}
 
 /* p8_lua.c's sleep() (Lua's usleep). A cart that sleeps blocks its own frame. */
 int usleep(unsigned int us)

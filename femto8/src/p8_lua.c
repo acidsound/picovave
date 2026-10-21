@@ -2782,6 +2782,12 @@ int lua_init()
     return 0;
 }
 
+void p8_lua_gc_step(void)
+{
+    if (L)
+        lua_gc(L, LUA_GCSTEP, 150);
+}
+
 void lua_get_error(const char **err_type, char *err, int err_size, const char **filename, int *lineno)
 {
     if (!L) {

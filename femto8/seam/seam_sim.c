@@ -71,3 +71,4 @@ BaseType_t xSemaphoreTake(SemaphoreHandle_t s, TickType_t ticks)
  * uses this for its fps readout. */
 TickType_t xTaskGetTickCount(void) { static TickType_t t; return t++; }
 void vTaskDelay(TickType_t ticks) { (void)ticks; }
+void p8_target_wdt_feed(void) { }
