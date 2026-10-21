@@ -59,6 +59,7 @@
 #include "smk_input.h"        /* fm1_input_init / fm1_input_tick / fm1_enc_take / fm1_in */
 #else
 #include "fm1_input.h"
+#include "fm1_adc.h"
 #endif
 #include "fm1_timer.h"        /* fm1_timer5_start: the 10 kHz tick */
 #include "fm1_audio.h"        /* fm1_audio_init / fm1_audio_pending, the ALNK0 half buffers */
@@ -372,6 +373,59 @@ static void hh_boot_stage(int stage)
         pv_crash_report();            /* if the last boot died, this stays on the panel instead */
 }
 
+/* Master volume in Q12 (0..4096; 4096 = 100% unity gain).
+ * Placed in .noinit so .data and .bss sizes stay identical, strictly preserving
+ * the SMK-37 Pro 415,696 B arena invariant. */
+static volatile int32_t pv_master_vol __attribute__((section(".noinit")));
+#if !BOARD_SMK37
+static int32_t pv_knob_avg __attribute__((section(".noinit")));
+
+static void pv_master_boot(void)
+{
+    uint32_t i;
+    (void)fm1_adc_read(FM1_ADC_MASTER);
+    for (i = 0; i < 3u; i++) {
+        int32_t a = fm1_adc_read(FM1_ADC_MASTER);
+        if (a >= 0) {
+            pv_knob_avg = a * 16;
+            if (a < 16) {
+                pv_master_vol = 0;
+            } else if (a >= 1010) {
+                pv_master_vol = 4096;
+            } else {
+                pv_master_vol = (int32_t)(((uint32_t)a * (uint32_t)a) >> 8);
+                if (pv_master_vol > 4096)
+                    pv_master_vol = 4096;
+            }
+            return;
+        }
+    }
+    if (pv_master_vol <= 0 || pv_master_vol > 4096)
+        pv_master_vol = 4096;
+}
+
+static void pv_master_poll(void)
+{
+    int32_t a = fm1_adc_poll();
+    if (a >= 0) {
+        if (a < 16) {
+            pv_knob_avg = 0;
+            pv_master_vol = 0;
+        } else if (a >= 1010) {
+            pv_knob_avg = 1023 * 16;
+            pv_master_vol = 4096;
+        } else {
+            pv_knob_avg += (a * 16 - pv_knob_avg) / 8;
+            uint32_t k10 = (uint32_t)(pv_knob_avg / 16);
+            pv_master_vol = (int32_t)((k10 * k10) >> 8);
+            if (pv_master_vol > 4096)
+                pv_master_vol = 4096;
+        }
+        fm1_adc_start(FM1_ADC_MASTER);
+    }
+}
+#endif
+
 static void hh_input_read(hin_t *in)
 {
     uint32_t i;
@@ -382,6 +436,12 @@ static void hh_input_read(hin_t *in)
     in->keys = fm1_in.keys;                   /* bit k = keybed key k held */
     for (i = 0; i < HIN_NENC; i++)
         in->enc[i] = (int8_t)fm1_enc_take(i); /* detents since the previous read, consumed here */
+    if (in->enc[0] != 0) {
+        int32_t nv = pv_master_vol + (int32_t)in->enc[0] * 128;
+        if (nv < 0) nv = 0;
+        if (nv > 4096) nv = 4096;
+        pv_master_vol = nv;
+    }
     in->pads = 0;                             /* the 16 pads: pressure > 0 means the pad is down */
     for (i = 0; i < HIN_NPAD; i++) {
         in->pad_vel[i] = fm1_in.pad_press[i];
@@ -463,10 +523,23 @@ void fm1_alnk0_irq(void)
         if (pv_ring_r != pv_ring_w) {
             const int16_t *s = pv_ring[pv_ring_r % PV_AUD_RING];
             pv_ring_r++;
-            for (i = 0; i < PV_AUD_HALF; i++) {
-                int32_t v = (int32_t)s[i] << 8;
-                o[2u * i] = v;
-                o[2u * i + 1u] = v;
+            int32_t vol = pv_master_vol;
+            if (vol >= 4096) {
+                for (i = 0; i < PV_AUD_HALF; i++) {
+                    int32_t v = (int32_t)s[i] << 8;
+                    o[2u * i] = v;
+                    o[2u * i + 1u] = v;
+                }
+            } else if (vol <= 0) {
+                for (i = 0; i < PV_AUD_WORDS; i++)
+                    o[i] = 0;
+            } else {
+                for (i = 0; i < PV_AUD_HALF; i++) {
+                    int32_t sample = ((int32_t)s[i] * vol) >> 12;
+                    int32_t v = sample << 8;
+                    o[2u * i] = v;
+                    o[2u * i + 1u] = v;
+                }
             }
         } else {
             for (i = 0; i < PV_AUD_WORDS; i++)
@@ -492,6 +565,14 @@ static void pv_audio_init(void)
     for (i = 0; i < sizeof pv_abuf / sizeof pv_abuf[0]; i++)
         pv_abuf[i] = 0;                 /* the DMA loops it before the first ISR */
     pv_ring_w = pv_ring_r = 0;
+#if BOARD_SMK37
+    if (pv_master_vol <= 0 || pv_master_vol > 4096)
+        pv_master_vol = 4096;
+#else
+    fm1_adc_init();
+    pv_master_boot();
+    fm1_adc_start(FM1_ADC_MASTER);
+#endif
     fm1_audio_init(pv_abuf, PV_AUD_WORDS, isr_alnk0, 3);   /* below TIMER5 (4) */
 }
 
@@ -948,6 +1029,9 @@ static void picovave_loop(void)
         }
         if (usb.uboot_req)                   /* SysEx F0 22 24 35 7D F7 from the host */
             picovave_enter_uboot("UBOOT (USB)");
+#if !BOARD_SMK37
+        pv_master_poll();
+#endif
         pv_audio_fill();
         picovave_frame();
     }
