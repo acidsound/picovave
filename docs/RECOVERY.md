@@ -28,14 +28,14 @@ SMK-37 Pro에서 그 영역은 **flash `0x04000-0x9CFFF`**, 즉 패키지 `flash
 
 ## 1. 필요한 것
 
-- **Linux(루트) 또는 Windows(관리자)** 호스트 — `jl-uboot-tool`은 raw SCSI로 말한다.
-  **macOS는 지원하지 않는다**(도구가 `darwin`에서 즉시 실패한다). 라즈베리파이도 된다.
-  Docker Desktop의 macOS VM은 USB 패스스루가 안 되므로 대안이 못 된다.
-- USB **데이터** 케이블(충전 전용 X), 허브 없이 직결.
-- [kagaimiq/jl-uboot-tool](https://github.com/kagaimiq/jl-uboot-tool) (`pip install -r requirements.txt`).
-- 복구할 패키지: `build/picovave.fwsc` (또는 순정 v016).
-- 기기 전체 flash **백업을 보관할 곳**(아래 4단계). `0xC0000-0xC1FFF`(BT/USRTRIM)와
-  `0xFF000-0xFFFFF`(key_mac)는 **그 기기에만 있는 값**이라 다시 받을 수 없다.
+- **macOS / Linux / Windows 모두 지원**:
+  - **macOS**: `tools/jl-uboot-tool`에 네이티브 PyUSB (Bulk-Only Transport) 드라이버(`scsiio/darwinport.py`)가 내장되어 있어, **터미널에서 `sudo` 명령 한 줄로 즉시 복구**할 수 있습니다.
+  - **Linux(루트) / Windows(관리자)**: `tools/jl-uboot-tool`의 SCSI 인터페이스로 직접 복구 가능.
+- USB **데이터** 케이블(충전 전용 X), 허브 없이 Mac/PC 직결.
+- 복구 도구: 이 저장소에 내장된 `tools/recover_fm1.py` 또는 `tools/recover_smk37.py` (또는 `tools/recover_uboot.py`).
+- 복구할 패키지: `build/picovave-fm1.fwsc` 또는 `build/picovave-smk37.fwsc` (`build/picovave.fwsc`).
+- 기기 전체 flash **백업을 보관할 곳**(필요 시 4단계). `0xC0000-0xC1FFF`(BT/USRTRIM)와
+  `0xFF000-0xFFFFF`(key_mac)는 **그 기기에만 있는 값**이므로 임의로 덮어쓰지 않습니다.
 
 ---
 
@@ -169,6 +169,20 @@ FM1_GUARD_PC)` + `FM1_EMU_CON &= ~(1u<<3)`). 즉 **`EMU bit3`(sp 창 밖) 크래
 이건 여전히 필요하다 — 위 수정과 별개로 유효하다). 순수 Lua 재귀는 C 스택을 쓰지 않으므로
 (루프로 처리된다) 영향받지 않는다.
 
+### 크래시의 원인(2026-10-23 실기 검증): pv_early_mark()의 m_memory NULL 포인터 역참조
+
+FM-1 최초 플래싱 후 재부팅 시 발생했던 즉각적인 크래시 및 UBOOT 전락 원인:
+
+- **발생 기전**: SPI DMA 대기 시간을 활용하기 위해 `pv_push_dirty()` 내 각 행 전송마다 `pv_audio_step_fill()`을 호출하도록 최적화하였음.
+- **문제점**: 부팅 극초기인 `fm1_cstart()`에서 화면에 빌드 태그를 그리는 `pv_early_mark()`가 실행될 때, 아직 PICO-8 엔진 초기화(`p8_init()`)가 수행되지 않아 `m_memory` 포인터가 `NULL` 상태였음.
+- `render_sounds()`가 `m_memory[MEMORY_AUDIO_PAUSE]`(주소 `0x00005F2F`)를 역참조하면서 하드웨어 버스 가드(`FM1_GUARD_BUS`)가 트랩되어 Vector 1 CPU Exception 발생.
+- 예외 핸들러 `fm1_fault()` 내의 크래시 화면 출력(`hg_crash_screen()`)에서도 `pv_push_dirty()`를 거치며 재귀적으로 크래시가 발생, 2회 부팅 실패 후 부트가드에 의해 `WL80UBOOT1.00` 다운로드 모드로 자동 진입함.
+- **해결책**:
+  1. `pv_audio_step_fill()` 및 `pv_audio_fill()`에 `pv_audio_up && m_memory` 가드를 추가하여 엔진 및 오디오 초기화 완료 전에는 절대 믹싱을 시도하지 않도록 방어.
+  2. `pv_audio_up` 플래그는 `pv_audio_init()`에서만 1로 세팅되고, 폴트 핸들러 `fm1_fault()` 진입 시 즉시 0으로 소거.
+  3. 변수 추가에 따른 `.bss` 정렬 변화를 `pv_ring_bss_pad[4076]`로 상쇄하여 SMK-37 Pro(`415,696 B`) 및 FM-1(`416,848 B`)의 Lua 힙 아레나 메모리 주소를 1바이트 오차 없이 보존.
+  4. 본 저장소의 `tools/recover_fm1.py` 및 `tools/recover_smk37.py`를 통해 macOS에서 즉시 복구 완료.
+
 ### 어느 빌드가 올라가 있는지 (패널을 믿지 말 것)
 
 **LCD는 마지막으로 그려진 프레임을 그대로 들고 있다.** 새 앱이 패널을 켜기 전에 죽으면
@@ -221,19 +235,47 @@ CRC16까지 확인한다. 그래서 **`done: ...`이 나왔다면 app 영역은 
 
 ### 3.1 macOS에서 어디까지 되는가 (결정 트리)
 
-`jl-uboot-tool`은 **16바이트 벤더 CDB + RAM 로더 업로드**로 flash를 쓴다(표준 READ/WRITE(10)의 LBA
-매핑이 아니다). 그래서 `dd`로 대신할 수 없고, 툴 자체도 `scsiio/__init__.py`에 `win32`/`linux`
-백엔드만 있어 macOS에서는 `ImportError`로 즉시 죽는다. **즉 macOS에는 raw SCSI 경로가 없다.**
+이전에는 `jl-uboot-tool`이 raw SCSI(Linux `/dev/sg*`, Windows `DeviceIoControl`)만 지원하여 macOS에서 UBOOT 복구가 불가능했으나, **이 저장소에 macOS용 PyUSB Bulk-Only Transport 백엔드(`tools/jl-uboot-tool/scsiio/darwinport.py`)를 자체 구현/탑재하여 macOS에서도 mask-ROM UBOOT 복구가 100% 지원**됩니다.
 
-| 기기 상태 | macOS에서 |
-|---|---|
-| 앱이 돎 / 앱의 RESCUE(부팅 2회 실패) / 업데이트 로더(`ota-SMK-37 Pro_7xx`·`_016`) | **USB-MIDI로 완전 복구된다** — 3.2 |
-| mask-ROM UBOOT(`WL82 UBOOT1.00`, MIDI 포트 없음) | **쓸 수 없다** → Linux/Windows, Linux VM(USB 패스스루), 또는 백업. `--uboot`은 macOS에서 사실상 편도행이다 |
+| 기기 상태 | macOS 복구 수단 | 복구 명령 |
+|---|---|---|
+| 앱 정상 실행 / 앱의 RESCUE(부팅 2회 실패) / 업데이트 로더 | **USB-MIDI로 간편 복구** (권한 불필요) | `python3 platform/tools/fm1_install.py build/picovave[-fm1].fwsc --yes` |
+| mask-ROM UBOOT (`WL80UBOOT1.00` / `WL82 UBOOT1.00`, MIDI 포트 없음) | **원클릭 UBOOT 플래시 복구** (macOS `sudo` 필요) | FM-1: `sudo .venv-ota/bin/python tools/recover_fm1.py`<br>SMK-37 Pro: `sudo .venv-ota/bin/python tools/recover_smk37.py` |
 
-MIDI가 살아 있는 한 macOS만으로 끝난다는 점이 중요하다: 업데이트 로더는 **중단된 설치를 이어서
-끝내고**, 앱이 죽어도 RESCUE가 다시 MIDI를 열며, RESCUE에서 또 실패해야 UBOOT으로 떨어진다.
+> **macOS에서 `sudo`가 필요한 이유:**  
+> macOS 커널(IOKit)의 보안 정책상, 일반 사용자 프로세스는 대용량 저장장치(Mass Storage) 클래스 기기의 원시 USB Bulk 엔드포인트(`0x01 OUT`, `0x81 IN`)를 독점 클레임하거나 커널 드라이버를 분리(detach)할 수 없습니다. `sudo` 권한으로 실행하면 PyUSB/libusb가 커널 드라이버를 우회하여 JieLi UBOOT과 직접 통신하고 안전하게 펌웨어를 복구합니다.
 
-### 3.2 macOS에서 복구하기 (MIDI)
+---
+
+### 3.2 원클릭 UBOOT 복구 도구 사용법 (`tools/recover_fm1.py`, `tools/recover_smk37.py`)
+
+기기가 부트 루프나 치명적 오류로 인해 mask-ROM UBOOT 상태(`WL80UBOOT1.00` 또는 `WL82 UBOOT1.00`)로 떨어졌을 때, 터미널에서 기기 모델에 맞는 명령을 한 줄만 실행합니다:
+
+```sh
+# FM-1 복구:
+sudo .venv-ota/bin/python tools/recover_fm1.py
+
+# SMK-37 Pro 복구:
+sudo .venv-ota/bin/python tools/recover_smk37.py
+
+# 또는 범용 도구 사용:
+sudo .venv-ota/bin/python tools/recover_uboot.py --board fm1
+sudo .venv-ota/bin/python tools/recover_uboot.py --board smk37
+```
+
+#### 이 스크립트가 자동으로 수행하는 작업:
+1. **타깃별 패키지 자동 추출:** `tools/make_app_area.py`를 실행하여 `.fwsc` 패키지에서 정확한 앱 슬롯 바이너리를 추출합니다:
+   - **FM-1:** `0x04000` ~ `0x093000` (585,728 B, `0x8F000`)
+   - **SMK-37 Pro:** `0x04000` ~ `0x09D000` (626,688 B, `0x99000`)
+   - *SPL/헤드(`0x00000..0x03FFF`) 및 캘리브레이션/키 영역(`0xC0000..`)은 절대 건드리지 않습니다.*
+2. **JieLi UBOOT 핸드셰이크 & RAM 로더 주입:** USB로 연결된 `0x4C4A:0x8057` 장치를 감지하고, 공식 WL82 RAM 로더(`wl82loader.bin`)를 기기의 volatile RAM(`0x1C02000`)에 업로드한 뒤 실행합니다.
+3. **플래시 메모리 검증 & 앱 슬롯 재작성:** 온칩 플래시 ID(FM-1: `0x856014`, SMK-37 Pro: `0xEB6014` 또는 `0x856014`)를 확인하고, 앱 영역만 섹터 단위로 소거한 뒤 새 바이너리를 프로그래밍합니다.
+4. **100% 바이트 대조 검증:** 기록된 전체 앱 영역을 플래시로부터 다시 읽어와 빌드 결과물의 SHA-256 해시와 1:1 바이트 단위로 대조 검증합니다.
+5. **기기 자동 리셋:** 칩에 `RUN_APP` 리셋 명령을 보내 정상적인 picovave 펌웨어로 즉시 부팅시킵니다. (부팅 완료 후 기존처럼 일반 USB-MIDI로 사용 및 업데이트 가능)
+
+---
+
+### 3.3 macOS에서 복구하기 (USB-MIDI가 살아있는 경우)
 
 ```sh
 python3 tools/ota_probe.py --list                        # 1. 무슨 상태인가 (포트 이름 = 아이덴티티)

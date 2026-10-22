@@ -50,6 +50,19 @@ void *gdi_get_frame_buffer_addr(int layer) { (void)layer; return p8_screen_fb; }
 void *rh_malloc(size_t n) { return malloc(n); }
 void  rh_free(void *p) { free(p); }
 
+extern void pv_c1_wait_done(void);
+extern int pv_dispatch_render(void);
+
+int p8_device_dispatch_render(void)
+{
+    return pv_dispatch_render();
+}
+
+void p8_device_wait_render(void)
+{
+    pv_c1_wait_done();
+}
+
 /* ---- the FreeRTOS slice femto8 uses --------------------------------------------
  * One thread and one interrupt, and the only shared thing the interrupt touches is
  * the audio ring index (picovave.c). Nothing here needs a real scheduler, so a
@@ -57,7 +70,13 @@ void  rh_free(void *p) { free(p); }
  * the simulator uses, with the board's TIMER4 for the clock. */
 SemaphoreHandle_t xSemaphoreCreateBinary(void) { static int s; return (SemaphoreHandle_t)&s; }
 BaseType_t xSemaphoreGive(SemaphoreHandle_t s) { (void)s; return pdTRUE; }
-BaseType_t xSemaphoreTake(SemaphoreHandle_t s, TickType_t ticks) { (void)s; (void)ticks; return pdTRUE; }
+BaseType_t xSemaphoreTake(SemaphoreHandle_t s, TickType_t ticks)
+{
+    (void)s;
+    (void)ticks;
+    pv_c1_wait_done();
+    return pdTRUE;
+}
 
 /* Milliseconds since boot, from the free-running 24 MHz counter TIMER4. */
 TickType_t xTaskGetTickCount(void)

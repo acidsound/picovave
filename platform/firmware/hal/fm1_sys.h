@@ -24,8 +24,37 @@
 #define FM1_RST_SRC (*(volatile uint32_t *)0x100C0u)
 #define FM1_BOOT_STATE ((volatile uint8_t *)0x01C7FD80u)
 #define FM1_PWR_CON (*(volatile uint32_t *)0x10000u)
+#define FM1_C1_CON (*(volatile uint32_t *)0x1EEE004u)
+#define FM1_C1_CLK (*(volatile uint32_t *)0x00010008u)
+#define FM1__DBG_WR_EN (*(volatile uint32_t *)0x1EEE240u)
+#define FM1__DBG_MSG_CLR (*(volatile uint32_t *)0x1EEE248u)
+#define FM1__DBG_EN (*(volatile uint32_t *)0x1EEE340u)
+#define FM1__DBG_BUS 0x003F0030u                 /* bus-invalid traps: AXI rd/wr (4, 5), C0/C1 fetch/rd/wr (16..21) */
 #define FM1_UPDATA_PARM ((volatile uint8_t *)0x01C7FD88u)
 #define FM1_UPDATA_PARM_LEN 112u
+
+static inline void fm1_cpu1_halt(void)
+{
+    uint32_t locked = !(FM1__DBG_WR_EN & 1u), en, bus = FM1__DBG_BUS;
+    volatile uint32_t n;
+    __asm__("" : "+r"(bus));
+    if (locked)
+        FM1__DBG_WR_EN = 0xE7u;
+    en = FM1__DBG_EN;
+    FM1__DBG_EN = en & ~bus;
+    __asm__ volatile("csync" ::: "memory");
+    FM1_C1_CON |= 0x2u;
+    FM1_C1_CON &= ~0x8u;
+    __asm__ volatile("csync" ::: "memory");
+    for (n = 0; n < 256u; n++)
+        ;
+    FM1__DBG_MSG_CLR = FM1__DBG_BUS;
+    __asm__ volatile("csync" ::: "memory");
+    FM1__DBG_EN = en;
+    if (locked && (FM1__DBG_WR_EN & 1u))
+        FM1__DBG_WR_EN = 0xE7u;
+    __asm__ volatile("csync" ::: "memory");
+}
 
 static uint32_t fm1_p33_timeouts;
 
@@ -109,6 +138,7 @@ static void fm1_reset_reason(void)
 static void fm1_reboot(void)
 {
     __asm__ volatile("cli");
+    fm1_cpu1_halt();
     fm1_p33_or(FM1_P3_PR_PWR, 0x10);
     for (;;)
         ;
@@ -119,6 +149,7 @@ static void fm1_enter_uboot(void)
     static const char k[16] = "usb_update_mode";
     uint32_t i;
     __asm__ volatile("cli");
+    fm1_cpu1_halt();
     /* CPU0 write limits (fm1_guard.h) may cover the mailbox: drop them all */
     if (!(*(volatile uint32_t *)0x1EEE240u & 1u))
         *(volatile uint32_t *)0x1EEE240u = 0xE7u;

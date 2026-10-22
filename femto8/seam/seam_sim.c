@@ -72,3 +72,5 @@ BaseType_t xSemaphoreTake(SemaphoreHandle_t s, TickType_t ticks)
 TickType_t xTaskGetTickCount(void) { static TickType_t t; return t++; }
 void vTaskDelay(TickType_t ticks) { (void)ticks; }
 void p8_target_wdt_feed(void) { }
+int p8_device_dispatch_render(void) { return 0; }
+void p8_device_wait_render(void) { }

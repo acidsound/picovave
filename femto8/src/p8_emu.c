@@ -669,6 +669,11 @@ int p8_step(void)                  /* one iteration of p8_main_loop() */
     if (ret != 0)
         return ret;
 
+#ifndef SDL
+    extern void p8_device_wait_render(void);
+    p8_device_wait_render();
+#endif
+
     ret = lua_draw();
     if (ret != 0)
         return ret;
@@ -916,6 +921,11 @@ void gdi_display_update_dirty(const uint8_t *row_dirty, int nrows,
 
 void p8_render()
 {
+#ifndef SDL
+    extern int p8_device_dispatch_render(void);
+    if (p8_device_dispatch_render())
+        return;
+#endif
     int y;
 
     if (xSemaphoreTake(m_drawSemaphore, portMAX_DELAY) != pdTRUE)

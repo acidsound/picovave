@@ -66,6 +66,10 @@
 #include "fm1_lcd_hw.h"       /* SPI1 pins and registers that lcd.c builds on */
 #include "fm1_flash.h"        /* the RAM flash driver, FL_XIP, FL_DATA_LO/HI, FL_JEDEC_OK */
 #include "lcd.c"              /* lcd_init / lcd_blit, the stock ST7789 v016 sequence */
+#include "fm1_cpu1.h"         /* the AC79 second core (Core 1) startup and IPC probe */
+
+fm1_c1_probe_t pv_c1_probe __attribute__((section(".noinit")));
+volatile uint32_t fm1_c1_trace __attribute__((section(".noinit")));
 
 /* ---- the shared screens (OTA / rescue / crash) ------------------------------------------
  * picovave_gfx.h draws into hg_fb; aliasing it onto the engine's own screen (seam_device.c,
@@ -129,6 +133,26 @@ static void pv_row_load(int y, uint16_t *dst)
  *
  * A run is sent top-to-bottom inside its window, so the panel's write pointer only ever advances
  * the way the ST7789 expects; nothing is read back and no frame-sized state is kept. */
+/* Forward declaration for audio topping up inside display streaming */
+static void
+pv_audio_fill(void);
+static inline void pv_audio_step_fill(void);
+
+void pv_c1_wait_done(void)
+{
+    if (fm1_core_id() != 0u || !pv_c1_probe.c1_alive)
+        return;
+    uint32_t cur = pv_c1_probe.job;
+    uint32_t t0 = fm1_ticks();
+    while (pv_c1_probe.done != cur) {
+        fm1_wdt_feed();
+        pv_audio_fill();
+        fm1_sync();
+        if ((uint32_t)(fm1_ticks() - t0) > 50u * 1000u * FM1_TICKS_PER_US)
+            break;
+    }
+}
+
 static void pv_push_dirty(const uint8_t *row_dirty)
 {
     int y, i, start, end;
@@ -149,6 +173,22 @@ static void pv_push_dirty(const uint8_t *row_dirty)
         start = y;
         while (y + 1 < GDI_OUT_H && (!row_dirty || row_dirty[y + 1]))
             y++;                       /* grow the run to its last consecutive dirty row */
+        /* Window consolidation: if the next dirty run is separated by only a small gap
+         * (<= 4 clean rows), bridge it into this run. At 60 MHz SPI, 4 rows stream in
+         * ~64 us, while ending and restarting an address window takes ~70-80 us of
+         * command round trips. Bridging collapses fragmented runs into solid bursts. */
+        while (row_dirty && y + 1 < GDI_OUT_H) {
+            int gap = 1;
+            while (y + gap < GDI_OUT_H && !row_dirty[y + gap])
+                gap++;
+            if (gap <= 4 && y + gap < GDI_OUT_H) {
+                y += gap;
+                while (y + 1 < GDI_OUT_H && row_dirty[y + 1])
+                    y++;
+            } else {
+                break;
+            }
+        }
         end = y;
         /* One address window per run: the command overhead is paid once per run, not per row. */
         lcd_stream_begin(0u, (uint32_t)start, GDI_OUT_W, (uint32_t)(end - start + 1));
@@ -156,6 +196,8 @@ static void pv_push_dirty(const uint8_t *row_dirty)
         uint16_t *next = lcd_fillbuf;
         pv_row_load(start, cur);
         for (i = start; i <= end; i++) {
+            if (fm1_core_id() == 0u)
+                pv_audio_step_fill();
             lcd_stream_wait();         /* the previous row is still on the wire */
             if (cur == pv_row)
                 lcd_stream_row(pv_row, GDI_OUT_W);
@@ -180,9 +222,31 @@ static void pv_push_dirty(const uint8_t *row_dirty)
     p8_panel_bytes += rows * (uint32_t)GDI_OUT_W * 2u + windows * 11u;
 }
 
+int pv_dispatch_render(void)
+{
+    if (fm1_core_id() == 0u && pv_c1_probe.c1_alive) {
+        pv_c1_wait_done();
+        fm1_c1_kick_render();
+        pv_audio_fill();
+        return 1;
+    }
+    return 0;
+}
+
+void pv_c1_do_push(void)
+{
+    pv_push_dirty(NULL);
+}
+
 static void pv_push(void)
 {
-    pv_push_dirty(NULL);               /* full repaint == "all 240 rows dirty" */
+    if (pv_c1_probe.c1_alive && fm1_core_id() == 0u) {
+        pv_c1_wait_done();
+        fm1_c1_kick_push_dirty();
+        pv_c1_wait_done();
+    } else {
+        pv_push_dirty(NULL);               /* full repaint == "all 240 rows dirty" */
+    }
 }
 
 /* Guarded: the USB rescue runs headless (no lcd_init), and ota_show() still calls this - the
@@ -288,6 +352,32 @@ static void hh_lcd_init(void) { lcd_init(); panel_up = 1; }
 #define PV_BUILD_TAG "no-tag"
 #endif
 
+#define PV_BTN_OCT_UP (1u << FM1_BTN_OCT_UP)
+
+static void pv_dualcore_probe(void)
+{
+    pv_c1_probe.c0_cnum = fm1_core_id();
+    pv_c1_probe.pingpong_ok = 0;
+    pv_c1_probe.pingpong_total = 0;
+    pv_c1_probe.elapsed_us = 0;
+
+    fm1_guard_pc_open();
+    int started = fm1_cpu1_start();
+    fm1_guard_enable(FM1_GUARD_PC);
+
+    if (started == 0 && pv_c1_probe.c1_alive) {
+        uint32_t t_start = fm1_ticks();
+        for (uint32_t round = 1; round <= 10000u; round++) {
+            if (fm1_cpu1_ping(round))
+                pv_c1_probe.pingpong_ok++;
+            pv_c1_probe.pingpong_total++;
+            if ((round % 1000u) == 0)
+                fm1_wdt_feed();
+        }
+        pv_c1_probe.elapsed_us = (fm1_ticks() - t_start) / FM1_TICKS_PER_US;
+    }
+}
+
 /* Painted from fm1_cstart before the stack scan and before the boot stages: if the panel still
  * shows the previous build's crash screen after a flash, the new image did not run at all. */
 static void pv_early_mark(void)
@@ -296,10 +386,87 @@ static void pv_early_mark(void)
     hg_clear(HG_BLACK);
     hg_text_center(20, "PICOVAVE", 2, HG_GREEN);
     hg_text_center(44, PV_BUILD_TAG, 1, HG_WHITE);
-    hg_text_center(62, "BOOT MARK: NEW IMAGE", 1, HG_DIM);
+    hg_text_center(62, pv_c1_probe.c1_alive ? "C0: OK  C1: OK" : "C0: OK  C1: OFF", 1, HG_CYAN);
     pv_blit();
 }
 static void hh_input_init(void) { fm1_input_init(); }
+
+static void pv_dualcore_screen(void)
+{
+    char s[32];
+    char *p;
+    uint32_t t0 = fm1_ticks();
+    uint32_t last_draw = 0;
+
+    hh_input_init();
+
+    for (;;) {
+        fm1_wdt_feed();
+        fm1_input_scan();
+        pv_c1_probe.c0_heartbeat++;
+        fm1_sync();
+
+        /* If user pressed any button other than OCT+, proceed to cart */
+        if (fm1_in.buttons && !(fm1_in.buttons & PV_BTN_OCT_UP))
+            break;
+
+        uint32_t now = fm1_ticks();
+        uint32_t elapsed_ms = (now - t0) / (1000u * FM1_TICKS_PER_US);
+
+        if ((now - last_draw) >= 50u * 1000u * FM1_TICKS_PER_US) {
+            last_draw = now;
+            hg_clear(HG_BLACK);
+            hg_text_center(4, "AC791N DUAL-CORE", 1, HG_GREEN);
+
+            p = hg_put_dec(s, "C0: OK (CNUM ", pv_c1_probe.c0_cnum);
+            p = hg_put_str(p, ")");
+            *p = 0;
+            hg_text(6, 16, s, 1, HG_CYAN);
+
+            if (pv_c1_probe.c1_alive) {
+                p = hg_put_dec(s, "C1: OK (CNUM ", pv_c1_probe.c1_cnum);
+                p = hg_put_str(p, ")");
+                *p = 0;
+                hg_text(6, 26, s, 1, HG_CYAN);
+            } else {
+                hg_text(6, 26, "C1: NOT RESPONDING", 1, HG_RED);
+            }
+
+            p = hg_put(s, "TRACE: ", fm1_c1_trace, 8);
+            *p = 0;
+            hg_text(6, 36, s, 1, HG_DIM);
+
+            p = hg_put_dec(s, "PINGPONG: ", pv_c1_probe.pingpong_ok);
+            p = hg_put_str(p, "/10000");
+            *p = 0;
+            hg_text(6, 48, s, 1, pv_c1_probe.pingpong_ok == 10000u ? HG_WHITE : HG_RED);
+
+            p = hg_put_dec(s, "IPC TIME: ", pv_c1_probe.elapsed_us);
+            p = hg_put_str(p, " US");
+            *p = 0;
+            hg_text(6, 58, s, 1, HG_DIM);
+
+            p = hg_put_dec(s, "C0 TICKS: ", pv_c1_probe.c0_heartbeat);
+            *p = 0;
+            hg_text(6, 72, s, 1, HG_YELLOW);
+
+            p = hg_put_dec(s, "C1 TICKS: ", pv_c1_probe.c1_heartbeat);
+            *p = 0;
+            hg_text(6, 82, s, 1, HG_YELLOW);
+
+            if (pv_c1_probe.c1_alive && pv_c1_probe.pingpong_ok == 10000u)
+                hg_text_center(96, "DUAL-CORE CONFIRMED", 1, HG_GREEN);
+
+            hg_text_center(108, "PRESS ANY KEY: PLAY", 1, HG_DIM);
+            hg_text_center(118, "OCT+: PAUSE PROBE", 1, HG_DIM);
+
+            pv_blit();
+        }
+
+        if (elapsed_ms >= 400u && !(fm1_in.buttons & PV_BTN_OCT_UP))
+            break;
+    }
+}
 
 /* Boot-stage breadcrumb. The fault screen needs panel_up and a watchdog reset prints nothing at
  * all, so a device that dies on the way up used to be a black panel and no information. Drawing
@@ -492,7 +659,7 @@ void gdi_display_update_dirty(const uint8_t *row_dirty, int nrows,
     (void)nrows;                       /* GDI_OUT_H; the mask is indexed by panel row, not source row */
     pv_push_dirty(row_dirty);
     if (cb)
-        cb(true, user_data);           /* both paths release the engine's draw semaphore */
+        cb(true, user_data);
 }
 
 /* ------------------------------------------------------------ the mixer (ALNK0) ---
@@ -503,13 +670,16 @@ void gdi_display_update_dirty(const uint8_t *row_dirty, int nrows,
  *
  * 24-bit left justified, both channels equal (mono -> stereo), like Makkuro37's audio.c. */
 extern void render_sounds(int16_t *buffer, int total_samples);
+extern uint8_t *m_memory;
 
 #define PV_AUD_HALF 256u                 /* mono frames a half: 5.8 ms */
 #define PV_AUD_WORDS (PV_AUD_HALF * 2u)  /* int32 words a half (L,R interleaved) */
-#define PV_AUD_RING 8u                   /* halves the main loop keeps queued */
+#define PV_AUD_RING 16u                  /* halves the main loop keeps queued: 92.8 ms of cushion */
 
 static int32_t pv_abuf[2u * PV_AUD_WORDS] __attribute__((aligned(4)));
-static int16_t pv_ring[PV_AUD_RING][PV_AUD_HALF];
+static uint8_t pv_ring_bss_pad[4076] __attribute__((used));    /* preserve exact .bss size so _pool_start stays 0x01C0E830 */
+static uint32_t pv_audio_up;
+static int16_t pv_ring[PV_AUD_RING][PV_AUD_HALF] __attribute__((section(".noinit")));
 static volatile uint32_t pv_ring_w, pv_ring_r;
 
 extern void isr_alnk0(void);             /* hal/fm1_isr.S wrapper */
@@ -553,7 +723,19 @@ void fm1_alnk0_irq(void)
  * has exactly one writer. */
 static void pv_audio_fill(void)
 {
+    if (fm1_core_id() != 0u || !pv_audio_up || !m_memory)
+        return;
     while (pv_ring_w - pv_ring_r < PV_AUD_RING) {
+        render_sounds(pv_ring[pv_ring_w % PV_AUD_RING], (int)PV_AUD_HALF);
+        pv_ring_w++;
+    }
+}
+
+/* Synthesise one half-buffer during LCD transmission if the ring has room.
+ * This hides audio rendering inside SPI DMA wait time, making audio mixing free. */
+static inline void pv_audio_step_fill(void)
+{
+    if (fm1_core_id() == 0u && pv_audio_up && m_memory && pv_ring_w - pv_ring_r < PV_AUD_RING) {
         render_sounds(pv_ring[pv_ring_w % PV_AUD_RING], (int)PV_AUD_HALF);
         pv_ring_w++;
     }
@@ -564,6 +746,8 @@ static void pv_audio_init(void)
     uint32_t i;
     for (i = 0; i < sizeof pv_abuf / sizeof pv_abuf[0]; i++)
         pv_abuf[i] = 0;                 /* the DMA loops it before the first ISR */
+    for (i = 0; i < sizeof pv_ring / sizeof pv_ring[0][0]; i++)
+        ((int16_t *)pv_ring)[i] = 0;
     pv_ring_w = pv_ring_r = 0;
 #if BOARD_SMK37
     if (pv_master_vol <= 0 || pv_master_vol > 4096)
@@ -573,6 +757,7 @@ static void pv_audio_init(void)
     pv_master_boot();
     fm1_adc_start(FM1_ADC_MASTER);
 #endif
+    pv_audio_up = 1;
     fm1_audio_init(pv_abuf, PV_AUD_WORDS, isr_alnk0, 3);   /* below TIMER5 (4) */
 }
 
@@ -1041,6 +1226,7 @@ static void fm1_fault(const fm1_crash_t *c)
 {
     static hg_crash_t h;              /* same: the handler must not need stack to say what happened */
     uint32_t t0;
+    pv_audio_up = 0;
     fm1_audio_stop();
     memset(&h, 0, sizeof h);
     h.pc = c->pc;
@@ -1083,6 +1269,7 @@ void fm1_cstart(void)
 {
     uint32_t *s, *d, boot_mode;
     uint8_t p3;
+    fm1_cpu1_halt();                         /* ensure Core 1 is halted before clearing RAM */
     fm1_time_init();
     fm1_reset_reason();
     p3 = fm1_boot.p3_rst;
@@ -1136,6 +1323,7 @@ void fm1_cstart(void)
     FM1_EMU_CON &= ~(1u << 3);               /* belt and braces: never armed by anything else */
     fm1__dbg_lock();
     fm1_guard_enable(FM1_GUARD_WRITE | FM1_GUARD_BUS | FM1_GUARD_PC);
+    pv_dualcore_probe();
     /* The panel first, before anything this firmware added. The LCD keeps its last frame through a
      * reset, so an unchanged picture on the panel cannot by itself tell "the flash never landed"
      * from "the new build died before it could draw". A mark naming this build, painted at the
@@ -1143,6 +1331,7 @@ void fm1_cstart(void)
     pv_early_mark();
     pv_stack_prev = pv_stack_depth();         /* what the previous boot used, before repainting */
     pv_stack_paint();
+    pv_dualcore_screen();
     {   /* USB rescue: two failed boots, or OCT- held at power-on. The 50 ms matrix scan is the same
          * one Makkuro37's recovery_key() does before its panel comes up. */
         uint32_t t0 = fm1_ticks();

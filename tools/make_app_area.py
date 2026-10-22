@@ -57,28 +57,39 @@ def main():
     args = ap.parse_args()
 
     product, fb = flash_bin_of(args.package)
-    if len(fb) != APP_HI:
-        raise SystemExit("%s: flash.bin is 0x%X bytes, expected 0x%X (SMK-37 Pro head+app)"
-                         % (args.package, len(fb), APP_HI))
+    if len(fb) == 0x93000 or "fm1" in args.package.lower() or product.startswith("FM-1"):
+        app_hi = 0x93000
+    elif len(fb) == 0x9D000:
+        app_hi = 0x9D000
+    else:
+        raise SystemExit("%s: flash.bin is 0x%X bytes, expected 0x9D000 (SMK-37) or 0x93000 (FM-1)"
+                         % (args.package, len(fb)))
 
-    app = fb[APP_LO:APP_HI]
+    app = fb[APP_LO:app_hi]
     out = args.out or os.path.join(os.path.dirname(args.package) or ".",
                                    os.path.splitext(os.path.basename(args.package))[0] + ".app-area.bin")
     with open(out, "wb") as fh:
         fh.write(app)
 
-    print("package   %s" % args.package)
+    try:
+        rel_pkg = os.path.relpath(args.package)
+        rel_out = os.path.relpath(out)
+    except Exception:
+        rel_pkg = args.package
+        rel_out = out
+
+    print("package   %s" % rel_pkg)
     print("product   %s" % product)
-    print("app area  0x%05X-0x%05X  (%d bytes, 0x%05X)" % (APP_LO, APP_HI - 1, len(app), len(app)))
+    print("app area  0x%05X-0x%05X  (%d bytes, 0x%05X)" % (APP_LO, app_hi - 1, len(app), len(app)))
     print("sha256    %s" % hashlib.sha256(app).hexdigest())
-    print("wrote     %s" % out)
+    print("wrote     %s" % rel_out)
     print()
-    print("On Linux (root) or Windows (admin) — NOT macOS — with the device in `WL82 UBOOT1.00`:")
-    print("  # 0. back up the whole flash first (twice, compare): read 0 0x100000 smk37-dump-1.bin")
-    print("  python3 jluboottool.py --device <dev> --chip wl82 \"erase 0x4000 0x99000\"")
-    print("  python3 jluboottool.py --device <dev> --chip wl82 \"write 0x4000 %s\"" % os.path.basename(out))
-    print("  python3 jluboottool.py --device <dev> --chip wl82 \"read 0x4000 0x99000 check.bin\"")
-    print("  # check.bin must equal %s (sha256 above). Then power-cycle." % os.path.basename(out))
+    print("On Linux (root) or Windows (admin) or macOS (sudo) with the device in `WL80/WL82 UBOOT`:")
+    print("  # 0. back up the whole flash first (twice, compare): read 0 0x100000 fm1-dump-1.bin")
+    print("  python3 tools/jl-uboot-tool/jluboottool.py --chip wl82 \"erase 0x4000 0x%X\"" % len(app))
+    print("  python3 tools/jl-uboot-tool/jluboottool.py --chip wl82 \"write 0x4000 %s\"" % rel_out)
+    print("  python3 tools/jl-uboot-tool/jluboottool.py --chip wl82 \"read 0x4000 0x%X check.bin\"" % len(app))
+    print("  # check.bin must equal %s (sha256 above). Then power-cycle." % rel_out)
     print()
     print("Never write these in UBOOT (restore only from your own dump):")
     for lo, hi, what in PROTECTED:

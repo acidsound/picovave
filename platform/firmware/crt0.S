@@ -24,3 +24,35 @@ _start:
 	ssp = _sstack_init
 	call fm1_cstart
 	goto .
+
+	.balign 4
+	.globl fm1_c1_entry
+fm1_c1_entry:
+	cli
+	r1 = fm1_c1_trace
+	r2 = 0xC1000001
+	[r1 + 0] = r2
+	icfg = 0
+	usp = _c1_ustack_init
+	sp = _c1_ustack_init
+	ssp = _c1_sstack_init
+	reti = fm1_c1_main
+	rti
+
+	.section .noinit.c1stack,"aw",@nobits
+	.balign 8
+	.globl _c1_ustack
+_c1_ustack:
+	.space 1792
+	.globl _c1_ustack_init
+_c1_ustack_init:
+	.space 256
+	.globl _c1_ustack_top
+_c1_ustack_top:
+_c1_sstack:
+	.space 192
+	.globl _c1_sstack_init
+_c1_sstack_init:
+	.space 64
+	.globl _c1_sstack_top
+_c1_sstack_top:

@@ -27,6 +27,9 @@
 #define HG_WHITE 0xFFFFu
 #define HG_GREEN HG_RGB(56, 200, 92)
 #define HG_DIM   HG_RGB(0, 96, 44)
+#define HG_CYAN   HG_RGB(0, 220, 220)
+#define HG_YELLOW HG_RGB(255, 220, 40)
+#define HG_RED    HG_RGB(240, 50, 50)
 
 extern uint16_t hg_fb[HG_W * HG_H];      /* firmware: the engine's screen; host: .bss */
 
@@ -130,6 +133,34 @@ static char *hg_put(char *d, const char *s, uint32_t v, uint32_t digits)
         *d++ = *s++;
     for (i = 0; i < digits; i++)
         *d++ = H[(v >> (4u * (digits - 1u - i))) & 15u];
+    return d;
+}
+
+/* append string `s` to `d`; returns the new end */
+static char *hg_put_str(char *d, const char *s)
+{
+    while (*s)
+        *d++ = *s++;
+    return d;
+}
+
+/* append `s`, then `v` in decimal; returns the new end */
+static char *hg_put_dec(char *d, const char *s, uint32_t v)
+{
+    char buf[12];
+    int i = 0;
+    while (*s)
+        *d++ = *s++;
+    if (!v) {
+        *d++ = '0';
+        return d;
+    }
+    while (v > 0) {
+        buf[i++] = (char)('0' + (v % 10u));
+        v /= 10u;
+    }
+    while (i > 0)
+        *d++ = buf[--i];
     return d;
 }
 
