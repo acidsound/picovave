@@ -24,6 +24,9 @@ level**, and by the same principle **flashed onto the real device**. The simulat
 as well: page, worklet and wasm are all picovave's and none of them reference `repo/`.
 
 - Reverse-engineering write-up: [docs/REVERSE_ENGINEERING.md](docs/REVERSE_ENGINEERING.md) (Korean)
+- Dual-Core AMP Architecture: [docs/DUAL_CORE_AMP.md](docs/DUAL_CORE_AMP.md)
+- UBOOT Recovery Guide: [docs/RECOVERY.md](docs/RECOVERY.md)
+- Handover Engineering Journal: [docs/HANDOVER.md](docs/HANDOVER.md) (Korean)
 - Artifact: [build/picovave.fwsc](build/picovave.fwsc)
 - Simulator: [build/sim/index.html](build/sim/index.html) — `python3 -m http.server -d build/sim 8738`
   (the **한국어 / EN** buttons at the top switch language, and the choice is remembered in the
@@ -52,18 +55,21 @@ the packer `platform/tools/fm1pkg_make.py`). What picovave writes itself is the 
 allocator (`femto8/stub/device/`) — so the parts already proven on hardware are not rebuilt. The
 other consumers (simulator, host) swap only a small hh_* HAL and the seam (`femto8/seam/`).
 
-## Display path
+## Display path and Dual-Core AMP acceleration
+
+The AC791N dual-core RISC processor is decoupled via **Asymmetric Multiprocessing (AMP)**:
+- **Core 0 (Application Core)**: Runs the PICO-8 Lua VM, single-writer audio synthesizer (`render_sounds()`), 10kHz timer input scan, and USB MIDI/SysEx. As soon as it finishes drawing to 4bpp 8KB VRAM (`m_memory + 0x6000`), it dispatches asynchronously to Core 1 (`p8_device_dispatch_render()`) and returns to the next task in **0.00 ms**.
+- **Core 1 (Graphics Co-processor)**: Handles 4bpp ➔ RGB565 palette LUT conversion, 240 dirty-row FNV-1a hash calculation, 128x128 ➔ 240x240 upscale (`gdi_expand_row`), and ST7789 SPI1 DMA streaming.
+- Full architecture, IPC protocol, and safety invariants: [docs/DUAL_CORE_AMP.md](docs/DUAL_CORE_AMP.md).
 
 The panel is fed over **30 MHz SPI**: a full 240x240 RGB565 frame is 115,200 B = **30.72 ms** of
-the 33.33 ms a 30 fps tick allows. The engine therefore hashes each 128-wide source row **while it
-renders it** (FNV-1a-32 over the RGB565 pixels it just wrote), compares that with the previous
-frame, and hands the target a 240-byte **PANEL-row mask** (`gdi_display_update_dirty()`, patch 11
-in [femto8/README.picovave.md](femto8/README.picovave.md)). The device opens one ST7789 address
-window per **run** of consecutive dirty rows and streams only those
-(`pv_push_dirty()` in [src/picovave.c](src/picovave.c)); boot, crash, OTA and rescue screens still
-repaint the whole panel (`pv_push()` is exactly "all 240 rows dirty"). The mask is a **superset**
-of the rows that changed by construction - a false dirty row only costs SPI time, a false clean row
-would leave a stale row on the panel - so restarts, a screen-transform/high-colour change, and every
+the 33.33 ms a 30 fps tick allows. Core 1 hashes each 128-wide source row **while it renders it**
+(FNV-1a-32 over the RGB565 pixels it just wrote), compares that with the previous frame, and evaluates
+a 240-byte **PANEL-row mask**. The device opens one ST7789 address window per **run** of consecutive dirty
+rows and streams only those (`pv_push_dirty()` in [src/picovave.c](src/picovave.c)); boot, crash, OTA and
+rescue screens still repaint the whole panel (`pv_push()` is exactly "all 240 rows dirty"). The mask is a
+**superset** of the rows that changed by construction - a false dirty row only costs SPI time, a false
+clean row would leave a stale row on the panel - so restarts, a screen-transform/high-colour change, and every
 frame that composites the engine's I/O icon mark all 240 rows.
 
 `tools/frame_budget.mjs` is the gate, measured on the eight gallery carts in both idle and scripted

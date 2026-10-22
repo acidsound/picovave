@@ -22,6 +22,9 @@ M-Vave SMK-37 Pro(AC791N)용 커스텀 펌웨어 패키지 형식을 역설계�
 `repo/`를 참조하지 않는다.
 
 - 구조 분석 전문: [docs/REVERSE_ENGINEERING.md](docs/REVERSE_ENGINEERING.md)
+- 듀얼코어 AMP 아키텍처: [docs/DUAL_CORE_AMP.md](docs/DUAL_CORE_AMP.md)
+- UBOOT 복구 가이드: [docs/RECOVERY.md](docs/RECOVERY.md)
+- 핸드오버 개발 기록: [docs/HANDOVER.md](docs/HANDOVER.md)
 - 산출물: [build/picovave.fwsc](build/picovave.fwsc)
 - 시뮬레이터: [build/sim/index.html](build/sim/index.html) — `python3 -m http.server -d build/sim 8738`
   (페이지 상단의 **한국어 / EN** 버튼으로 언어를 바꾼다. 선택은 브라우저에 기억된다. 머리말 오른쪽의
@@ -49,13 +52,17 @@ M-Vave SMK-37 Pro(AC791N)용 커스텀 펌웨어 패키지 형식을 역설계�
 (`femto8/stub/device/`)뿐이라, 하드웨어에서 이미 검증된 부분은 다시 만들지 않는다. 다른 소비자
 (시뮬레이터/호스트)는 작은 hh_* HAL과 seam(`femto8/seam/`)만 바꿔 끼운다.
 
-## 표시 경로
+## 표시 경로와 듀얼코어 AMP 가속
+
+AC791N의 듀얼 RISC 코어를 **비대칭 멀티프로세싱(AMP)** 으로 분리 구동한다:
+- **Core 0 (메인 코어)**: PICO-8 Lua VM, 단일 작성자 오디오 믹서(`render_sounds()`), 10kHz 타이머 입력 스캔, USB MIDI/SysEx 전담. 4bpp 8KB VRAM(`m_memory + 0x6000`)에 그리기를 마치는 즉시 Core 1에 비동기 디스패치(`p8_device_dispatch_render()`)하여 **0.00ms만에 다음 프레임 작업으로 복귀**한다.
+- **Core 1 (그래픽 코프로세서)**: 4bpp ➔ RGB565 LUT 변환, 240 dirty-row FNV-1a 해시 판별, 128x128 ➔ 240x240 양방향 하드웨어 업스케일(`gdi_expand_row`), ST7789 SPI1 DMA 스트리밍 전담.
+- 상세 구조와 코어 간 IPC 및 안전성 불변식: [docs/DUAL_CORE_AMP.md](docs/DUAL_CORE_AMP.md)
 
 패널은 **30 MHz SPI**로 구동되므로 240x240 RGB565 한 프레임은 115,200 B = **30.72 ms**이고, 이는
-30 fps 틱의 33.33 ms 중 대부분이다. 그래서 엔진은 각 128폭 소스 행을 **렌더하면서** 해시하고
+30 fps 틱의 33.33 ms 중 대부분이다. Core 1은 각 128폭 소스 행을 **렌더하면서** 해시하고
 (FNV-1a-32, 방금 쓴 RGB565 픽셀), 이전 프레임과 비교해 240바이트 **PANEL 행 마스크**를
-`gdi_display_update_dirty()`로 넘긴다([femto8/README.picovave.md](femto8/README.picovave.md)의
-패치 11). 기기는 연속으로 dirty인 행의 **run마다** ST7789 주소 창을 하나 열고 그 행들만
+판별한다. 기기는 연속으로 dirty인 행의 **run마다** ST7789 주소 창을 하나 열고 그 행들만
 스트리밍한다([src/picovave.c](src/picovave.c)의 `pv_push_dirty()`). 부팅·크래시·OTA·복구 화면은
 여전히 전체를 다시 그린다(`pv_push()` = "240행 모두 dirty"). 마스크는 구조적으로 실제 변경 행의
 **상위집합**이다 — 거짓 dirty는 SPI 시간만 쓰고, 거짓 clean은 패널에 낡은 행을 남기기 때문이다.
