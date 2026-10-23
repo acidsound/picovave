@@ -154,7 +154,7 @@ static void ota_reply_identity(void)
     for (i = 0; i < sizeof id; i++)
         id[i] = i < sizeof ID - 1u ? (uint8_t)ID[i] : 0;
 #endif
-#ifdef PV_BUILD_TAG
+#if BOARD_SMK37 && defined(PV_BUILD_TAG)
     {   /* The 27 bytes are NUL padded. The tag rides after the terminator, so what every
          * M-UPGRADE host - ours and the vendor's - reads as the identity is byte for byte
          * unchanged, while a host that knows to look can tell which build is on the device.

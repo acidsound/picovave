@@ -268,11 +268,23 @@ static int usb_cdc_now(void) { return 0; }
 static const uint8_t STR0[4] = {4, 3, 0x09, 0x04};
 static const uint8_t STR1[] = {42, 3, 'H', 0, 0xFC, 0, 'g', 0, 'e', 0, 'l', 0, 't', 0, 'o', 0, 'n', 0, ' ', 0, 'I', 0,
                                'n', 0, 's', 0, 't', 0, 'r', 0, 'u', 0, 'm', 0, 'e', 0, 'n', 0, 't', 0, 's', 0};
+#if BOARD_SMK37
 #ifdef FELUCCA_LOADER
-static const uint8_t STR2[] = {32, 3, 'p', 0, 'i', 0, 'c', 0, 'o', 0, 'v', 0, 'a', 0, 'v', 0, 'e', 0, ' ', 0,
-                               'U', 0, 'p', 0, 'd', 0, 'a', 0, 't', 0, 'e', 0};
+static const uint8_t STR2[] = {58, 3, 'S', 0, 'M', 0, 'K', 0, '-', 0, '3', 0, '7', 0, ' ', 0, 'P', 0, 'r', 0, 'o', 0, ' ', 0,
+                               'U', 0, 'p', 0, 'd', 0, 'a', 0, 't', 0, 'e', 0, ' ', 0, '(', 0, 'p', 0, 'i', 0, 'c', 0, 'o', 0,
+                               'v', 0, 'a', 0, 'v', 0, 'e', 0, ')', 0}; /* SMK-37 Pro Update (picovave) */
 #else
-static const uint8_t STR2[] = {18, 3, 'p', 0, 'i', 0, 'c', 0, 'o', 0, 'v', 0, 'a', 0, 'v', 0, 'e', 0};  /* the MIDI port (picovave's own name) */
+static const uint8_t STR2[] = {44, 3, 'S', 0, 'M', 0, 'K', 0, '-', 0, '3', 0, '7', 0, ' ', 0, 'P', 0, 'r', 0, 'o', 0, ' ', 0,
+                               '(', 0, 'p', 0, 'i', 0, 'c', 0, 'o', 0, 'v', 0, 'a', 0, 'v', 0, 'e', 0, ')', 0}; /* SMK-37 Pro (picovave) */
+#endif
+#else /* FM-1 */
+#ifdef FELUCCA_LOADER
+static const uint8_t STR2[] = {46, 3, 'F', 0, 'M', 0, '-', 0, '1', 0, ' ', 0, 'U', 0, 'p', 0, 'd', 0, 'a', 0, 't', 0, 'e', 0, ' ', 0,
+                               '(', 0, 'p', 0, 'i', 0, 'c', 0, 'o', 0, 'v', 0, 'a', 0, 'v', 0, 'e', 0, ')', 0}; /* FM-1 Update (picovave) */
+#else
+static const uint8_t STR2[] = {32, 3, 'F', 0, 'M', 0, '-', 0, '1', 0, ' ', 0, '(', 0, 'p', 0, 'i', 0, 'c', 0, 'o', 0,
+                               'v', 0, 'a', 0, 'v', 0, 'e', 0, ')', 0}; /* FM-1 (picovave) */
+#endif
 #endif
 
 static int get_desc(uint32_t wvalue, const uint8_t **d, uint16_t *l)
@@ -774,7 +786,7 @@ static void midi_in_event(uint32_t pkt)
 static int ep1_take(const uint8_t *b, uint32_t n)
 {
     uint32_t i;
-#ifndef FELUCCA_LOADER
+#if 0 /* picovave has no synth engine consuming midi_in_q; backpressuring EP1 OUT locks up USB SysEx/OTA */
     if (MQ - (mi_w - mi_r) < EP1_ROOM)
         return 0;
 #endif

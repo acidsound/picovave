@@ -32,27 +32,31 @@ BOARDS = {
     },
 }
 
-def recover(board_key: str):
+def recover(board_key: str, custom_pkg: Path = None):
     info = BOARDS.get(board_key)
     if not info:
         print(f"Error: Unknown board '{board_key}'. Supported: smk37, fm1")
         return 1
 
     board_name = info["name"]
-    pkg = next((p for p in info["pkg_candidates"] if p.exists()), None)
+    pkg = custom_pkg if (custom_pkg and custom_pkg.exists()) else next((p for p in info["pkg_candidates"] if p.exists()), None)
     if not pkg:
-        candidate_names = " or ".join(str(p.relative_to(SRC)) for p in info["pkg_candidates"])
-        print(f"Error: Package not found ({candidate_names})!")
-        print(f"Run 'python3 tools/build_picovave.py --board {board_key}' first.")
+        if custom_pkg:
+            print(f"Error: Specified package not found: {custom_pkg}")
+        else:
+            candidate_names = " or ".join(str(p.relative_to(SRC)) for p in info["pkg_candidates"])
+            print(f"Error: Package not found ({candidate_names})!")
+            print(f"Run 'python3 tools/build_picovave.py --board {board_key}' first.")
         return 1
 
     app_bin = info["app_bin"]
     app_len = info["app_len"]
 
+    pkg_disp = str(pkg.relative_to(SRC)) if pkg.is_relative_to(SRC) else pkg.name
     print(f"=== {board_name} mask-ROM UBOOT Recovery ===")
     
     # 1. Prepare app-area binary
-    print(f"[*] Preparing app area from {pkg.relative_to(SRC)}...")
+    print(f"[*] Preparing app area from {pkg_disp}...")
     res = subprocess.run([sys.executable, str(SRC / "tools" / "make_app_area.py"), str(pkg), "-o", str(app_bin)],
                          capture_output=True, text=True)
     if res.returncode != 0:
@@ -114,8 +118,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--board", choices=["smk37", "fm1"], default="smk37",
                         help="Target board to recover: smk37 (SMK-37 Pro) or fm1 (FM-1) [default: smk37]")
+    parser.add_argument("--pkg", type=Path, default=None,
+                        help="Path to custom .fwsc package (e.g. ~/Downloads/FM-1.fwsc) [default: build target]")
     args = parser.parse_args()
-    return recover(args.board)
+    return recover(args.board, custom_pkg=args.pkg)
 
 if __name__ == "__main__":
     sys.exit(main())

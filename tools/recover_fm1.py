@@ -5,6 +5,7 @@
 Usage (requires root/sudo for raw USB bulk transfer on macOS):
     sudo .venv-ota/bin/python tools/recover_fm1.py
 """
+import argparse
 import sys
 from pathlib import Path
 
@@ -13,4 +14,7 @@ sys.path.insert(0, str(SRC / "tools"))
 from recover_uboot import recover
 
 if __name__ == "__main__":
-    sys.exit(recover("fm1"))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--pkg", type=Path, default=None, help="Custom .fwsc package path (e.g. ~/Downloads/FM-1.fwsc)")
+    args = parser.parse_args()
+    sys.exit(recover("fm1", custom_pkg=args.pkg))
