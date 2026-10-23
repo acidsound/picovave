@@ -123,7 +123,7 @@ export function parseRequest(pkt) {
 
 const latin1 = (u) => String.fromCharCode.apply(null, u);
 
-// a device identity reply (cmd 0x11) -> { text, model, version, loader }, or null
+// a device identity reply (cmd 0x11) -> { text, model, version, loader, tag }, or null
 export function parseIdentity(pkt) {
   if (!pkt || pkt.length < 2 || pkt[0] !== 0xF0 || pkt[pkt.length - 1] !== 0xF7) return null;
   const d = unpack7(pkt.subarray(1, pkt.length - 1));
@@ -133,7 +133,15 @@ export function parseIdentity(pkt) {
   const text = latin1(d.subarray(6, end));
   const m = /^([^_]+)_(\d+)$/.exec(text);
   if (!m) return null;
-  return { text, model: m[1], version: parseInt(m[2], 10), loader: m[1].toLowerCase().startsWith("ota-") };
+  let tag = "";
+  if (end < 33) {
+    let tagStart = end + 1;
+    while (tagStart < 33 && d[tagStart] === 0) tagStart++;
+    let tagEnd = tagStart;
+    while (tagEnd < 33 && d[tagEnd] !== 0) tagEnd++;
+    if (tagStart < tagEnd) tag = latin1(d.subarray(tagStart, tagEnd));
+  }
+  return { text, model: m[1], version: parseInt(m[2], 10), tag, loader: m[1].toLowerCase().startsWith("ota-") };
 }
 
 // --------------------------------------------------------------- package ---
