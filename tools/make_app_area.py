@@ -54,18 +54,29 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("package", help="a .fwsc package (e.g. build/picovave.fwsc)")
     ap.add_argument("-o", "--out", help="output file (default <stem>.app-area.bin)")
+    ap.add_argument("--full", action="store_true", help="write entire flash.bin from 0x0000 (recommended for stock firmware packages)")
     args = ap.parse_args()
 
     product, fb = flash_bin_of(args.package)
-    if len(fb) == 0x93000 or "fm1" in args.package.lower() or product.startswith("FM-1"):
-        app_hi = 0x93000
-    elif len(fb) == 0x9D000:
-        app_hi = 0x9D000
-    else:
-        raise SystemExit("%s: flash.bin is 0x%X bytes, expected 0x9D000 (SMK-37) or 0x93000 (FM-1)"
-                         % (args.package, len(fb)))
+    is_official = not any(tag in product for tag in ("_700", "_900", "picovave"))
+    use_full = args.full or is_official
 
-    app = fb[APP_LO:app_hi]
+    if use_full:
+        start_addr = 0x00000
+        app = fb
+        app_hi = len(fb)
+        range_desc = "full flash.bin (stock restore)"
+    else:
+        start_addr = APP_LO
+        if len(fb) == 0x93000:
+            app_hi = 0x93000
+        elif len(fb) == 0x9D000:
+            app_hi = 0x9D000
+        else:
+            app_hi = len(fb)
+        app = fb[APP_LO:app_hi]
+        range_desc = "app area"
+
     out = args.out or os.path.join(os.path.dirname(args.package) or ".",
                                    os.path.splitext(os.path.basename(args.package))[0] + ".app-area.bin")
     with open(out, "wb") as fh:
@@ -80,20 +91,22 @@ def main():
 
     print("package   %s" % rel_pkg)
     print("product   %s" % product)
-    print("app area  0x%05X-0x%05X  (%d bytes, 0x%05X)" % (APP_LO, app_hi - 1, len(app), len(app)))
+    print("start     0x%05X" % start_addr)
+    print("range     0x%05X-0x%05X  (%d bytes, 0x%05X) [%s]" % (start_addr, start_addr + len(app) - 1, len(app), len(app), range_desc))
     print("sha256    %s" % hashlib.sha256(app).hexdigest())
     print("wrote     %s" % rel_out)
     print()
     print("On Linux (root) or Windows (admin) or macOS (sudo) with the device in `WL80/WL82 UBOOT`:")
     print("  # 0. back up the whole flash first (twice, compare): read 0 0x100000 fm1-dump-1.bin")
-    print("  python3 tools/jl-uboot-tool/jluboottool.py --chip wl82 \"erase 0x4000 0x%X\"" % len(app))
-    print("  python3 tools/jl-uboot-tool/jluboottool.py --chip wl82 \"write 0x4000 %s\"" % rel_out)
-    print("  python3 tools/jl-uboot-tool/jluboottool.py --chip wl82 \"read 0x4000 0x%X check.bin\"" % len(app))
+    print("  python3 tools/jl-uboot-tool/jluboottool.py --chip wl82 \"erase 0x%X 0x%X\"" % (start_addr, len(app)))
+    print("  python3 tools/jl-uboot-tool/jluboottool.py --chip wl82 \"write 0x%X %s\"" % (start_addr, rel_out))
+    print("  python3 tools/jl-uboot-tool/jluboottool.py --chip wl82 \"read 0x%X 0x%X check.bin\"" % (start_addr, len(app)))
     print("  # check.bin must equal %s (sha256 above). Then power-cycle." % rel_out)
     print()
     print("Never write these in UBOOT (restore only from your own dump):")
     for lo, hi, what in PROTECTED:
-        print("  0x%05X-0x%05X  %s" % (lo, hi - 1, what))
+        if not (start_addr == 0 and lo == 0):
+            print("  0x%05X-0x%05X  %s" % (lo, hi - 1, what))
 
 
 if __name__ == "__main__":

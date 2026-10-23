@@ -52,11 +52,17 @@ def recover(board_key: str, custom_pkg: Path = None):
     app_bin = info["app_bin"]
     app_len = info["app_len"]
 
-    pkg_disp = str(pkg.relative_to(SRC)) if pkg.is_relative_to(SRC) else pkg.name
+    try:
+        pkg_disp = str(pkg.relative_to(SRC))
+    except ValueError:
+        try:
+            pkg_disp = f"~/{pkg.relative_to(Path.home())}"
+        except ValueError:
+            pkg_disp = pkg.name
     print(f"=== {board_name} mask-ROM UBOOT Recovery ===")
     
-    # 1. Prepare app-area binary
-    print(f"[*] Preparing app area from {pkg_disp}...")
+    # 1. Prepare flash binary
+    print(f"[*] Preparing binary from {pkg_disp}...")
     res = subprocess.run([sys.executable, str(SRC / "tools" / "make_app_area.py"), str(pkg), "-o", str(app_bin)],
                          capture_output=True, text=True)
     if res.returncode != 0:
@@ -69,29 +75,33 @@ def recover(board_key: str, custom_pkg: Path = None):
         return 1
 
     actual_len = len(app_bin.read_bytes())
-    if actual_len != app_len:
-        print(f"Error: Expected app binary size {app_len} bytes, got {actual_len} bytes!")
-        return 1
+    # Determine flash start address: official stock restores write from 0x00000; picovave from 0x04000
+    sys.path.insert(0, str(SRC / "tools"))
+    import fwsc
+    pkg_info = fwsc.parse(pkg.read_bytes())
+    product = pkg_info.get("product", "")
+    is_official = not any(tag in product for tag in ("_700", "_900", "picovave"))
+    start_addr = 0x00000 if (custom_pkg and is_official) else 0x04000
 
     expected_sha = hashlib.sha256(app_bin.read_bytes()).hexdigest()
-    print(f"[*] App binary: {actual_len} bytes (0x{actual_len:X}), SHA256: {expected_sha}")
+    print(f"[*] Flash binary: {actual_len} bytes (0x{actual_len:X}) at 0x{start_addr:05X}, SHA256: {expected_sha}")
 
     # 2. Check root permissions on macOS
     if sys.platform == "darwin" and os.geteuid() != 0:
         print("\n[!] On macOS, accessing the raw USB UBOOT device requires root privileges.")
         print("Please re-run this script with sudo:")
-        print(f"    sudo .venv-ota/bin/python tools/recover_{board_key}.py")
-        print(f"    (or: sudo .venv-ota/bin/python tools/recover_uboot.py --board {board_key})\n")
+        print(f"    sudo .venv-ota/bin/python tools/recover_{board_key}.py" + (f" --pkg {pkg_disp}" if custom_pkg else ""))
+        print(f"    (or: sudo .venv-ota/bin/python tools/recover_uboot.py --board {board_key}" + (f" --pkg {pkg_disp})\n" if custom_pkg else ")\n"))
         return 1
 
     # 3. Execute flashing via jluboottool
-    print(f"[*] Connecting to JieLi UBOOT device and flashing 0x4000..0x{0x4000+app_len:X}...")
+    print(f"[*] Connecting to JieLi UBOOT device and flashing 0x{start_addr:05X}..0x{start_addr+actual_len:05X}...")
     cmd = [
         sys.executable,
         str(UBOOT_TOOL),
         "--chip", "wl82",
-        f"write 0x4000 {app_bin}",
-        f"read 0x4000 0x{app_len:X} {CHECK_BIN}",
+        f"write 0x{start_addr:X} {app_bin}",
+        f"read 0x{start_addr:X} 0x{actual_len:X} {CHECK_BIN}",
         "reset"
     ]
 
