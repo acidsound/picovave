@@ -389,7 +389,42 @@ static void pv_early_mark(void)
     hg_text_center(62, pv_c1_probe.c1_alive ? "C0: OK  C1: OK" : "C0: OK  C1: OFF", 1, HG_CYAN);
     pv_blit();
 }
-static void hh_input_init(void) { fm1_input_init(); }
+#if BOARD_SMK37
+static const uint8_t PV_GAME_PADS[7] = {1, 8, 9, 10, 13, 14, 15};
+
+static void pv_led_init(void)
+{
+    uint32_t i;
+    for (i = 0; i < 16u; i++)
+        padled_set(i, 0, 0, 0);
+    for (i = 0; i < sizeof PV_GAME_PADS; i++)
+        padled_set(PV_GAME_PADS[i], 40, 40, 40); /* Idle: Soft White */
+    padled_flush();
+}
+#else
+/* FM-1 game keys:
+ * D-pad: F3 (14), G3 (16), G#3 (17), A3 (18), A#3 (19), B3 (20), C4 (21)
+ * Actions: E5 (37), G5 (40)
+ * Pause: Button 12, Button 8
+ */
+static const uint8_t PV_FM1_GUIDE_KEYS[] = {14, 16, 17, 18, 19, 20, 21, 37, 40};
+static const uint8_t PV_FM1_GUIDE_BTNS[] = {8, 12};
+
+static void pv_led_init(void)
+{
+    uint32_t i;
+    for (i = 0; i < sizeof PV_FM1_GUIDE_KEYS; i++)
+        fm1_led_dim_key(PV_FM1_GUIDE_KEYS[i], 1);
+    for (i = 0; i < sizeof PV_FM1_GUIDE_BTNS; i++)
+        fm1_led_dim_key(PV_FM1_GUIDE_BTNS[i], 1);
+}
+#endif
+
+static void hh_input_init(void)
+{
+    fm1_input_init();
+    pv_led_init();
+}
 
 static void pv_dualcore_screen(void)
 {
@@ -619,6 +654,18 @@ static void hh_input_read(hin_t *in)
         in->fader[i] = fm1_in.fader[i];
     for (i = 0; i < HIN_NWHEEL; i++)          /* pitch and mod wheels, raw (10-bit) */
         in->wheel[i] = fm1_in.wheel[i];
+
+    /* Update SMK-37 pad LEDs: active game pads are Orange if pressed, White if idle */
+    for (i = 0; i < sizeof PV_GAME_PADS; i++) {
+        uint32_t p = PV_GAME_PADS[i];
+        if (in->pad_vel[p])
+            padled_set(p, 255, 80, 0);   /* Pressed: Orange/Amber */
+        else
+            padled_set(p, 40, 40, 40);    /* Idle: Soft White */
+    }
+    if (pv_c1_probe.c1_alive)
+        pv_c1_wait_done();
+    padled_flush();
 #else
     /* FM-1: 27 keys (F3..G5) are bit 0..26 of fm1_in.notes.
      * In the 37-keybed representation (C3..C6), F3 is key 5, so shift by 5. */
@@ -631,6 +678,14 @@ static void hh_input_read(hin_t *in)
     for (i = 0; i < HIN_NPAD; i++) in->pad_vel[i] = 0;
     for (i = 0; i < HIN_NFADER; i++) in->fader[i] = 0;
     for (i = 0; i < HIN_NWHEEL; i++) in->wheel[i] = 0;
+
+    /* Update FM-1 key/button LEDs */
+    uint32_t notes = fm1_in.notes;
+    for (i = 0; i < 27u; i++)
+        fm1_led_key(14u + i, (notes & (1u << i)) != 0);
+    uint32_t btns = fm1_in.buttons;
+    for (i = 0; i < FM1_NBTN; i++)
+        fm1_led_key(i, (btns & (1u << i)) != 0);
 #endif
 }
 
@@ -677,7 +732,11 @@ extern uint8_t *m_memory;
 #define PV_AUD_RING 16u                  /* halves the main loop keeps queued: 92.8 ms of cushion */
 
 static int32_t pv_abuf[2u * PV_AUD_WORDS] __attribute__((aligned(4)));
-static uint8_t pv_ring_bss_pad[4076] __attribute__((used));    /* preserve exact .bss size so _pool_start stays 0x01C0E830 */
+#if BOARD_SMK37
+static uint8_t pv_ring_bss_pad[3388] __attribute__((used));    /* preserve exact .bss size so _pool_start stays 0x01C0E830 */
+#else
+static uint8_t pv_ring_bss_pad[4076] __attribute__((used));
+#endif
 static uint32_t pv_audio_up;
 static int16_t pv_ring[PV_AUD_RING][PV_AUD_HALF] __attribute__((section(".noinit")));
 static volatile uint32_t pv_ring_w, pv_ring_r;

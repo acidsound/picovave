@@ -379,3 +379,17 @@ static void fm1_led_key(uint32_t id, int on)
                     fm1_led[p] &= (uint8_t)~(1u << r);
             }
 }
+
+/* Dim glow LED of key id (gamepad landmarks / guide in the dark) */
+static void fm1_led_dim_key(uint32_t id, int on)
+{
+    uint32_t p, r;
+    for (p = 0; p < FM1_NCOL; p++)
+        for (r = 1; r < 5u; r++)
+            if (FM1_KEYMAP[r][p] == (int8_t)id) {
+                if (on)
+                    fm1_led_dim[p] |= (uint8_t)(1u << r);
+                else
+                    fm1_led_dim[p] &= (uint8_t)~(1u << r);
+            }
+}
