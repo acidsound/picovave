@@ -216,5 +216,9 @@ static void picovave_boot(void)       /* everything before the loop; re-runnable
     }
 
     picovave_frame();
+#ifndef SDL
+    extern void p8_device_wait_render(void);
+    p8_device_wait_render();
+#endif
     hh_boot_stage(5);
 }

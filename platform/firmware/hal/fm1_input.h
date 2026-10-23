@@ -323,17 +323,19 @@ static void fm1_input_tick(void)
         fm1__frame();
 }
 
-/* main-loop critical section against fm1_input_tick (main loop only: it
- * re-enables interrupts unconditionally) */
+/* main-loop critical section against fm1_input_tick (main loop only) */
 static inline uint32_t fm1__lock(void)
 {
+    uint32_t ic;
+    __asm__ volatile("%0 = icfg" : "=r"(ic));
     __asm__ volatile("cli" ::: "memory");
-    return 0;
+    return ic;
 }
 static inline void fm1__unlock(uint32_t v)
 {
-    (void)v;
-    __asm__ volatile("csync\n\tsti" ::: "memory");
+    if (v & 0x100u) {
+        __asm__ volatile("csync\n\tsti" ::: "memory");
+    }
 }
 
 /* detent steps turned since the last call, + = clockwise */

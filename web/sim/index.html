@@ -83,6 +83,10 @@
   .statusrail { max-width:var(--max); margin:0 auto; padding:0 var(--gutter) 8px; }
   .brandmark { grid-area:brand; display:flex; flex-direction:column; gap:3px; text-decoration:none;
                user-select:none; }
+  .brandmark-title { display:flex; align-items:center; gap:8px; }
+  .tag-badge { display:inline-block; padding:1px 6px; font:600 10px/1.2 var(--font-mono);
+               color:var(--p11); background:rgba(0,231,86,.12); border:1px solid rgba(0,231,86,.3);
+               border-radius:3px; letter-spacing:.05em; text-transform:none; vertical-align:middle; }
   .brandmark h1 { margin:0; color:var(--p10); font:700 18px/1 var(--font-ui); letter-spacing:.2em; }
   #moto { color:var(--dim); font:10px/1.2 var(--font-mono); letter-spacing:.12em;
           text-transform:uppercase; }
@@ -649,7 +653,10 @@
 <header class="masthead">
   <div class="masthead__inner">
     <a class="brandmark" href="#instrument" aria-label="PICOVAVE">
-      <h1 id="brand">PICOVAVE</h1>
+      <div class="brandmark-title">
+        <h1 id="brand">PICOVAVE</h1>
+        <span class="tag-badge" id="mastTag">tag __BUILD_TAG__</span>
+      </div>
       <span id="moto">PICO-8 console · SMK-37 Pro</span>
     </a>
     <nav class="sitenav" aria-label="주요 섹션 / Primary">
@@ -772,7 +779,7 @@
       <div class="devbar">
         <h3 id="devtitle">DEVICE · 플래시 / 카트</h3>
         <div class="devrow">
-          <span><span id="lblInstalled">설치된 앱</span> <b id="device">PICOVAVE</b></span>
+          <span><span id="lblInstalled">설치된 앱</span> <b id="device">PICOVAVE</b> <span class="tag-badge" id="devTag">tag __BUILD_TAG__</span></span>
           <span>identity <b id="devid">-</b></span>
           <span>flash <b id="devsize">0x100000 (1 MB)</b></span>
           <span><span id="lblAppSlot">app 슬롯</span> <b id="devapp">-</b></span>
@@ -802,8 +809,8 @@
               <button id="simPicovave" class="pri on" type="button">SIMULATOR picovave.fwsc</button>
               <label id="drop"><span id="lblDrop">원복용 .fwsc 선택 / 끌어다 놓기</span><input type="file" id="v016" accept=".fwsc"></label>
               <button id="simRestore" class="ghost" type="button">SIMULATOR 복원</button>
-              <a id="dlPicovave" class="ghost" href="./picovave.fwsc" download="picovave-smk37.fwsc">SMK-37 Pro .fwsc 내려받기</a>
-              <a id="dlPicovaveFm1" class="ghost" href="./picovave-fm1.fwsc" download="picovave-fm1.fwsc">FM-1 .fwsc 내려받기</a>
+              <a id="dlPicovave" class="ghost" href="./picovave.fwsc" download="picovave-smk37.fwsc">SMK-37 Pro .fwsc 내려받기 (tag __BUILD_TAG__)</a>
+              <a id="dlPicovaveFm1" class="ghost" href="./picovave-fm1.fwsc" download="picovave-fm1.fwsc">FM-1 .fwsc 내려받기 (tag __BUILD_TAG__)</a>
             </div>
           </section>
 
@@ -1725,6 +1732,7 @@ function setLang(next, persist) {
 // picovave. The package the device would flash and the wasm the panel runs come from the same
 // sources. A dropped package is matched to it by content (its flash.bin), not by name, so a
 // foreign ROM (the stock v016) is never mistaken for ours.
+const BUILD_TAG = "__BUILD_TAG__";
 const FW = {
   picovave: { label: "PICOVAVE", wasm: "./sim.wasm", pkg: "./picovave.fwsc",
            moto: 'PICO-8 console · SMK-37 Pro' },
@@ -2240,7 +2248,8 @@ async function scanPorts() {
   }
   midiPort = hit.name; $("midiport").value = hit.name;
   say(t("selectedPortLog", { name: hit.name }));
-  ok("scanDone", { name: hit.name, id: hit.id.text });
+  const idStr = hit.id.tag ? `${hit.id.text} (tag ${hit.id.tag})` : (hit.id.text + (hit.id.loader ? "" : " (tag 없음: 구버전)"));
+  ok("scanDone", { name: hit.name, id: idStr });
 }
 
 /* FLASH(USB): put a package on the real device over Web MIDI SysEx. fm1_install.py is the
@@ -3053,7 +3062,7 @@ async function boot() {
 
   // The package list the device box can flash (ours only; the stock ROM is the user's file).
   const have = Object.keys(FW).filter((k) => pkgs[k]).map((k) =>
-    `${FW[k].label}: ${pkgs[k].pkg.product} · flash.bin ` +
+    `${FW[k].label}: ${pkgs[k].pkg.product} · tag ${BUILD_TAG} · flash.bin ` +
     (pkgs[k].flash ? pkgs[k].flash.length.toLocaleString() + " B" : t("notAvailable")));
   pkgShown = null;
   pkgHave = have;

@@ -198,19 +198,30 @@ static RAMFN int fl_read_ram(uint32_t off, uint8_t *dst, uint32_t n)   /* 0x0B f
 
 /* Once at boot, before any XIP read of the data region: map the data area
  * as an unencrypted XIP window (as the SDK's IOCTL_SET_VM_INFO does). */
+static inline uint32_t irq_save(void)
+{
+    uint32_t ic;
+    __asm__ volatile("%0 = icfg" : "=r"(ic));
+    __asm__ volatile("cli" ::: "memory");
+    return ic;
+}
+static inline void irq_restore(uint32_t f)
+{
+    if (f & 0x100u) {
+        __asm__ volatile("csync\n\tsti" ::: "memory");
+    }
+}
+
 static void fl_plain_window_init(void)
 {
     SFCENC_CON &= (uint8_t)~2u;
     SFCENC_UNENC_L = FL_XIP(FL_PLAIN_LO);         /* FM-1 0x0208F000 (0x93000); SMK 0x02099000 (0x9D000) */
     SFCENC_UNENC_H = 0x07FFFFFFu;
     SFCENC_CON |= 2u;
-    __asm__ volatile("cli" ::: "memory");
+    uint32_t f = irq_save();
     fl_inval(FL_PLAIN_LO, 0x100000u - FL_PLAIN_LO);   /* drop any decrypted lines */
-    __asm__ volatile("csync\n\tsti" ::: "memory");
+    irq_restore(f);
 }
-
-static inline uint32_t irq_save(void) { __asm__ volatile("cli" ::: "memory"); return 0; }
-static inline void irq_restore(uint32_t f) { (void)f; __asm__ volatile("csync\n\tsti" ::: "memory"); }
 
 static int fl_erase4k(uint32_t off, uint32_t *took_us)
 {

@@ -735,7 +735,7 @@ static int32_t pv_abuf[2u * PV_AUD_WORDS] __attribute__((aligned(4)));
 #if BOARD_SMK37
 static uint8_t pv_ring_bss_pad[3388] __attribute__((used));    /* preserve exact .bss size so _pool_start stays 0x01C0E830 */
 #else
-static uint8_t pv_ring_bss_pad[4076] __attribute__((used));
+static uint8_t pv_ring_bss_pad[4044] __attribute__((used));
 #endif
 static uint32_t pv_audio_up;
 static int16_t pv_ring[PV_AUD_RING][PV_AUD_HALF] __attribute__((section(".noinit")));
@@ -1403,14 +1403,14 @@ void fm1_cstart(void)
     if (boot_mode == BOOT_RECOVERY || bootguard_manual(fm1_in.buttons))
         picovave_rescue();                      /* never returns: the app-level updater over USB-MIDI */
     fl_plain_window_init();                     /* XIP-read the SLOOP store (plain, undecrypted) */
-    pv_cart_init();                             /* which slot runs: the newest committed one */
-    picovave_boot();                            /* hh_time/lcd/input init, p8_init, load, one frame */
     flash_ok = FL_JEDEC_OK(FL_FAR(fl_jedec_ram)());
     if (flash_ok)
         ota_boot_cleanup();                     /* staging area left by an update */
+    pv_cart_init();                             /* which slot runs: the newest committed one */
     pv_audio_init();
     pv_audio_fill();
     usb_start();
+    picovave_boot();                            /* hh_time/lcd/input init, p8_init, load, one frame */
     /* The sp meter belongs to the run that dies: picovave_boot() has now shown the PREVIOUS run's
      * numbers (pv_crash_report reads them first), so start this run's from here. .noinit is not
      * cleared on a cold power-on, and a stale small value would freeze the meter for the whole

@@ -571,7 +571,7 @@ def run(a, backend, out, ask):
     up.out = out
     resume = getattr(a, "resume_loader", None)     # tests build their own namespace
     if a.info:
-        dev = up.find()
+        dev = up.wait_for(None, a.wait) if getattr(a, "wait", 0) > 0 else up.find()
         if not dev:
             raise not_found(up)
         dev.link.close()
@@ -581,7 +581,11 @@ def run(a, backend, out, ask):
         return 0
     product, image = load_package(a.package, a.force)
     print(f"package: {product}  ({a.package})", file=out)
-    dev = up.find()
+    if getattr(a, "wait", 0) > 0:
+        print(f"waiting up to {a.wait:.0f}s for device...", file=out, flush=True)
+        dev = up.wait_for(None, a.wait)
+    else:
+        dev = up.find()
     if not dev:
         raise not_found(up)
     resumable = not dev.id.loader or OWN_LOADER_RE.fullmatch(dev.id.text) or resume == dev.id.text
@@ -630,6 +634,8 @@ def main(argv=None, backend=None, out=sys.stdout, ask=ask_tty):
     ap.add_argument("--info", action="store_true", help="print the identity of the connected FM-1")
     ap.add_argument("--port", metavar="NAME", help="MIDI port to use (part of its name)")
     ap.add_argument("--yes", action="store_true", help="do not ask for confirmation")
+    ap.add_argument("--wait", type=float, default=0, metavar="SECS",
+                    help="wait up to SECS for the device to connect/power-on")
     ap.add_argument("--force", action="store_true", help="install a package without the Felucca loader marker")
     ap.add_argument("--resume-loader", metavar="IDENTITY",
                     help="finish the update of a loader that is not Felucca's own, e.g. the stock "

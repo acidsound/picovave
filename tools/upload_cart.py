@@ -56,8 +56,9 @@ def crc16(data):
 def open_ports():
     inp_names = mido.get_input_names()
     outp_names = mido.get_output_names()
-    felucca_in = [n for n in inp_names if "felucca" in n.lower() or "smk" in n.lower()]
-    felucca_out = [n for n in outp_names if "felucca" in n.lower() or "smk" in n.lower()]
+    targets = ("felucca", "smk", "fm", "picovave")
+    felucca_in = [n for n in inp_names if any(t in n.lower() for t in targets)]
+    felucca_out = [n for n in outp_names if any(t in n.lower() for t in targets)]
     if not felucca_in or not felucca_out:
         print(f"Device not found. Inputs: {inp_names}, Outputs: {outp_names}", file=sys.stderr)
         sys.exit(1)

@@ -34,6 +34,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pvcart                        # the built-in default cart (a cooked cart, tools/pvcart.py)
+import sources                       # build tag and inputs stamp
 
 SRC = Path(__file__).resolve().parents[1]
 SIM = SRC / "sim"
@@ -289,9 +290,12 @@ def main():
     wasm = compile_wasm(engine, a.out / "sim.wasm", flags, alloc)
     print("wasm     %s  %d B" % (wasm, wasm.stat().st_size))
 
-    for name in ("index.html", "picovave_render.js", "fwsc.mjs", "fm1ota.mjs", "p8png.mjs",
+    tag = sources.build_tag()
+    for name in ("picovave_render.js", "fwsc.mjs", "fm1ota.mjs", "p8png.mjs",
                  "luabc.mjs"):
         shutil.copy(WEB / name, a.out / name)
+    index_html = (WEB / "index.html").read_text().replace("__BUILD_TAG__", tag)
+    (a.out / "index.html").write_text(index_html)
 
     # The page's cart compiler: the DEVICE's Lua built for wasm32 (tools/build_luabc.py), so the
     # bytecode an upload carries is the chunk the device would have made itself. Stamped, so this
